@@ -154,9 +154,18 @@ async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<
   };
 
   const tryResolve = async (threadId: string): Promise<ThreadChannel | null> => {
+    // discord.js does not support fetching a thread by id via parent.threads.fetch(threadId).
+    // Use the global client channel fetch instead.
     try {
-      const t = (await parent.threads.fetch(threadId)) as any;
-      if (t) return t as ThreadChannel;
+      const fetched = await m.client.channels.fetch(threadId).catch(() => null);
+      if (fetched && (fetched as any).isThread?.()) {
+        const t = fetched as ThreadChannel;
+        // Ensure it belongs to this parent channel
+        if ((t as any).parentId === parent.id) {
+          if ((t as any).archived) await (t as any).setArchived(false).catch(() => null);
+          return t;
+        }
+      }
     } catch {}
 
     const active = await parent.threads.fetchActive().catch(() => null);
@@ -321,13 +330,24 @@ async function main() {
           const { parent } = getThreadAndParentChannel(ch);
           if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
           const cwd = cix.options.getString('path', true);
+
           await upsertChannelCwd(parent.id, cwd);
+
           const fullParent = await parent.fetch().catch(() => parent);
           const newTopic = buildTopicWithCwd(fullParent.topic, cwd);
+
+          let topicOk = true;
           await fullParent.setTopic(newTopic).catch((e: any) => {
+            topicOk = false;
             console.error('[oc-bridge] failed to set channel topic:', e?.message ?? e);
           });
-          await cix.reply({ content: `Set CWD for channel to: ${cwd}`, ephemeral: true });
+
+          await cix.reply({
+            content: topicOk
+              ? `Set CWD for channel to: ${cwd} (topic updated)`
+              : `Set CWD for channel to: ${cwd} (WARNING: failed to update channel topic; check bot permissions)`,
+            ephemeral: true,
+          });
         },
       });
     } catch (e: any) {

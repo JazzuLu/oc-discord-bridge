@@ -43,14 +43,16 @@ function parseCwdFromTopic(topic: string | null | undefined): string | null {
 /** Build a new topic string with the CWD= line replaced or appended. */
 function buildTopicWithCwd(existing: string | null | undefined, cwd: string): string {
   const cwdLine = `CWD=${cwd}`;
-  const lines = (existing ?? '').split(/\r?\n/);
-  const cwdIdx = lines.findIndex((l) => l.trimStart().startsWith('CWD='));
-  if (cwdIdx >= 0) {
-    lines[cwdIdx] = cwdLine;
-  } else {
-    lines.push(cwdLine);
-  }
+
+  // Split into lines; remove ALL existing CWD= lines to avoid accumulating duplicates.
+  const rawLines = (existing ?? '').split(/\r?\n/);
+  const nonCwdLines = rawLines.filter((l) => !l.trimStart().startsWith('CWD='));
+
+  // Keep the topic stable-ish by appending our CWD line to the end.
+  const lines = [...nonCwdLines, cwdLine];
+
   let topic = lines.join('\n');
+
   // Respect Discord 1024 char limit: trim older non-CWD lines from the top.
   while (topic.length > TOPIC_MAX) {
     const parts = topic.split('\n');
@@ -59,6 +61,7 @@ function buildTopicWithCwd(existing: string | null | undefined, cwd: string): st
     parts.splice(removed, 1);
     topic = parts.join('\n');
   }
+
   return topic.slice(0, TOPIC_MAX);
 }
 
@@ -172,7 +175,7 @@ async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<
     const inActive = findInCollections(active, (t) => t.id === threadId);
     if (inActive) return inActive;
 
-    const archived = await parent.threads.fetchArchived({ limit: 50 }).catch(() => null);
+    const archived = await parent.threads.fetchArchived({ limit: 100 }).catch(() => null);
     const inArchived = findInCollections(archived, (t) => t.id === threadId);
     if (inArchived) {
       if ((inArchived as any).archived) await inArchived.setArchived(false).catch(() => null);
@@ -196,7 +199,7 @@ async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<
     return byNameActive;
   }
 
-  const archived = await parent.threads.fetchArchived({ limit: 50 }).catch(() => null);
+  const archived = await parent.threads.fetchArchived({ limit: 100 }).catch(() => null);
   const byNameArchived = findInCollections(archived, (t) => t.name === 'main');
   if (byNameArchived) {
     if ((byNameArchived as any).archived) await byNameArchived.setArchived(false).catch(() => null);
@@ -368,6 +371,11 @@ async function main() {
       // Ensure we have full channel objects (topics on parents are often missing on partials)
       const ch = await m.channel.fetch().catch(() => m.channel);
       let { thread, parent } = getThreadAndParentChannel(ch);
+
+      // If user is already in the canonical 'main' thread, remember it to avoid duplicates.
+      if (thread && parent && thread.name === 'main') {
+        await upsertChannelMainThread(parent.id, thread.id);
+      }
 
       // Convenience: if user talks in a configured text channel, reuse (or create) a main thread
       if (!thread && parent) {

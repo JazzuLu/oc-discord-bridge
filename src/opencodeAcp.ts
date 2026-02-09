@@ -85,7 +85,7 @@ export class OpenCodeAcpClient {
         return;
       } catch (e) {
         this.log('acp:ready_failed', this.m({ err: (e as any)?.message ?? String(e) }));
-        this.proc.kill('SIGTERM');
+        this.killProc('ready_failed', this.m({ err: (e as any)?.message ?? String(e) }));
         this.proc = undefined;
         this.rl?.close();
         this.rl = undefined;
@@ -108,9 +108,7 @@ export class OpenCodeAcpClient {
       .catch((e) => {
         this.log('acp:init_failed', this.m({ err: (e as any)?.message ?? String(e) }));
         // If init fails, ensure this proc doesn't linger in a half-ready state.
-        try {
-          this.proc?.kill('SIGTERM');
-        } catch {}
+        this.killProc('init_failed', this.m({ err: (e as any)?.message ?? String(e) }));
 
         // If the caller awaited start() and init failed, still allow watchdog to recover.
         if (!this.stopping && this.watchdog) {
@@ -191,7 +189,28 @@ export class OpenCodeAcpClient {
 
   stop(): void {
     this.stopping = true;
-    this.proc?.kill('SIGTERM');
+    this.killProc('stop', this.lastMeta);
+  }
+
+  private killProc(reason: string, meta?: Record<string, unknown>): void {
+    const p = this.proc;
+    if (!p) return;
+
+    this.log('acp:kill', this.m({ reason, pid: p.pid, ...(meta ?? {}) }));
+
+    try {
+      p.kill('SIGTERM');
+    } catch {}
+
+    // If it doesn't exit promptly, force kill. Avoid leaving a wedged ACP.
+    setTimeout(() => {
+      // If process already cleared, ignore.
+      if (this.proc !== p) return;
+      try {
+        this.log('acp:kill_sigkill', this.m({ reason, pid: p.pid }));
+        p.kill('SIGKILL');
+      } catch {}
+    }, 3_000).unref?.();
   }
 
   private async reloadDesiredSessions(): Promise<void> {
@@ -268,9 +287,7 @@ export class OpenCodeAcpClient {
       // If stdin is broken (EPIPE), force a restart. Callers can retry.
       this.log('acp:stdin_write_failed', this.m({ method, id, err: e?.message ?? String(e), ...(meta ?? {}) }));
       if (!this.stopping && this.watchdog) {
-        try {
-          this.proc?.kill('SIGTERM');
-        } catch {}
+        this.killProc('stdin_write_failed', this.m({ method, id, ...(meta ?? {}) }));
       }
       throw e;
     }
@@ -287,10 +304,8 @@ export class OpenCodeAcpClient {
 
           // If ACP stops responding, force a restart (watchdog will bring it back).
           if (!this.stopping && this.watchdog) {
-            try {
-              this.log('acp:request_timeout_restart', this.m({ method, id, timeoutMs, ...(meta ?? {}) }));
-              this.proc?.kill('SIGTERM');
-            } catch {}
+            this.log('acp:request_timeout_restart', this.m({ method, id, timeoutMs, ...(meta ?? {}) }));
+            this.killProc('request_timeout', this.m({ method, id, timeoutMs, ...(meta ?? {}) }));
           }
         }, timeoutMs);
       }
@@ -384,7 +399,7 @@ export class OpenCodeAcpClient {
       // Bounded retry: ACP can be mid-restart or briefly unavailable.
       // Higher-level callers also retry; this is a last-mile hedge.
       let lastErr: unknown;
-      for (let attempt = 1; attempt <= 2; attempt++) {
+      for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           await this.send(
             'session/prompt',
@@ -398,13 +413,19 @@ export class OpenCodeAcpClient {
           return;
         } catch (e) {
           lastErr = e;
-          if (attempt >= 2) break;
+          if (attempt >= 3) break;
 
-          this.log('acp:prompt_retry', this.m({ sessionId, attempt, err: (e as any)?.message ?? String(e), ...(meta ?? {}) }));
+          const base = 200 * 2 ** (attempt - 1);
+          const jitter = Math.floor(Math.random() * 150);
+          const delay = Math.min(2_000, base + jitter);
 
-          // Small backoff + give watchdog a chance to restart.
-          const jitter = Math.floor(Math.random() * 100);
-          await sleep(250 + jitter);
+          this.log(
+            'acp:prompt_retry',
+            this.m({ sessionId, attempt, delayMs: delay, err: (e as any)?.message ?? String(e), ...(meta ?? {}) }),
+          );
+
+          // Backoff + give watchdog a chance to restart.
+          await sleep(delay);
           await this.start();
         }
       }

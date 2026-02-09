@@ -33,20 +33,57 @@ export class OpenCodeAcpClient {
   private restartAttempt = 0;
   private ready: Promise<void> = Promise.resolve();
 
-  constructor(private bin: string, private cwd: string) {}
+  constructor(
+    private bin: string,
+    private cwd: string,
+    private log: (msg: string, meta?: Record<string, unknown>) => void = (msg, meta) => {
+      const parts = ['[oc-bridge]', msg];
+      if (meta) {
+        for (const [k, v] of Object.entries(meta)) parts.push(`${k}=${String(v)}`);
+      }
+      console.log(parts.join(' '));
+    },
+  ) {}
+
   async start(opts?: StartOptions): Promise<void> {
     if (typeof opts?.watchdog === 'boolean') this.watchdog = opts.watchdog;
-    if (this.proc) return await this.ready;
+
+    // If we're already started, just await readiness. If readiness failed, force a restart.
+    if (this.proc) {
+      try {
+        await this.ready;
+        return;
+      } catch (e) {
+        this.log('acp:ready_failed', { err: (e as any)?.message ?? String(e) });
+        this.proc.kill('SIGTERM');
+        this.proc = undefined;
+        this.rl?.close();
+        this.rl = undefined;
+        this.loadedSessions.clear();
+        // fallthrough to fresh start
+      }
+    }
+
     this.stopping = false;
     this.proc = spawn(this.bin, ['acp', '--cwd', this.cwd], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
     });
 
+    this.log('acp:spawn', { pid: this.proc.pid });
+
     // Always (re-)initialize on (re)start.
-    this.ready = this.initialize();
+    this.ready = this.initialize().catch((e) => {
+      this.log('acp:init_failed', { err: (e as any)?.message ?? String(e) });
+      // If init fails, ensure this proc doesn't linger in a half-ready state.
+      try {
+        this.proc?.kill('SIGTERM');
+      } catch {}
+      throw e;
+    });
 
     this.proc.on('exit', (code, signal) => {
+      this.log('acp:exit', { code, signal });
       const err = new Error(`opencode acp exited: code=${code} signal=${signal}`);
       for (const { reject } of this.pending.values()) reject(err);
       this.pending.clear();
@@ -60,6 +97,14 @@ export class OpenCodeAcpClient {
       if (!this.stopping && this.watchdog) {
         void this.restartWithBackoff();
       }
+    });
+
+    // Surface stderr for debugging (no secrets expected here; still keep it terse).
+    this.proc.stderr?.on('data', (buf) => {
+      const s = String(buf).trim();
+      if (!s) return;
+      const line = s.split(/\r?\n/)[0];
+      this.log('acp:stderr', { line: line.slice(0, 500) });
     });
 
     this.rl = readline.createInterface({ input: this.proc.stdout! });
@@ -101,12 +146,18 @@ export class OpenCodeAcpClient {
     const base = Math.min(30_000, 500 * 2 ** this.restartAttempt);
     const jitter = Math.floor(Math.random() * 250);
     const delay = base + jitter;
+    const attempt = this.restartAttempt + 1;
     this.restartAttempt = Math.min(this.restartAttempt + 1, 10);
+
+    this.log('acp:watchdog_restart_scheduled', { attempt, delayMs: delay });
     await sleep(delay);
+
     try {
       await this.start();
+      this.log('acp:watchdog_restart_ok', { attempt });
       this.restartAttempt = 0;
-    } catch {
+    } catch (e) {
+      this.log('acp:watchdog_restart_failed', { attempt, err: (e as any)?.message ?? String(e) });
       // If start/initialize fails, try again.
       if (!this.stopping) void this.restartWithBackoff();
     }
@@ -148,11 +199,15 @@ export class OpenCodeAcpClient {
 
   async newSession(cwd: string): Promise<{ sessionId: string }> {
     const res = await this.send('session/new', { cwd, mcpServers: [] });
-    if (res?.sessionId) this.loadedSessions.add(res.sessionId);
+    if (res?.sessionId) {
+      this.loadedSessions.add(res.sessionId);
+      this.log('acp:session_new', { sessionId: res.sessionId });
+    }
     return res;
   }
 
   async loadSession(sessionId: string, cwd: string): Promise<void> {
+    this.log('acp:session_load', { sessionId });
     await this.send('session/load', { sessionId, cwd, mcpServers: [] });
     this.loadedSessions.add(sessionId);
   }

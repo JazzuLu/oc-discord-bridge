@@ -2,7 +2,13 @@ import dotenv from 'dotenv';
 // Be explicit: tsx/Node cwd differences can make dotenv/config miss the file.
 dotenv.config({ path: new URL('../.env', import.meta.url) });
 import { loadConfig } from './config.js';
-import { JsonStore, type ChannelCwdMap, type PausedChannelsMap, type ThreadSessionMap } from './storage.js';
+import {
+  JsonStore,
+  type ChannelCwdMap,
+  type ChannelMainThreadMap,
+  type PausedChannelsMap,
+  type ThreadSessionMap,
+} from './storage.js';
 import { OpenCodeAcpClient } from './opencodeAcp.js';
 import {
   createDiscordClient,
@@ -12,14 +18,16 @@ import {
   registerSlashCommands,
 } from './discord.js';
 import type { ChatInputCommandInteraction, Message, TextChannel, ThreadChannel } from 'discord.js';
-import path from 'node:path';
 
 const cfg = loadConfig(process.env);
 const store = new JsonStore(cfg.DATA_DIR);
 
 const FILE_CHANNEL_CWD = 'channelCwd.json';
+const FILE_CHANNEL_MAIN_THREAD = 'channelMainThread.json';
 const FILE_THREAD_SESSION = 'threadSession.json';
 const FILE_PAUSED = 'pausedChannels.json';
+
+const TOPIC_MAX = 1024;
 
 function parseCwdFromTopic(topic: string | null | undefined): string | null {
   if (!topic) return null;
@@ -32,6 +40,28 @@ function parseCwdFromTopic(topic: string | null | undefined): string | null {
   return cwd || null;
 }
 
+/** Build a new topic string with the CWD= line replaced or appended. */
+function buildTopicWithCwd(existing: string | null | undefined, cwd: string): string {
+  const cwdLine = `CWD=${cwd}`;
+  const lines = (existing ?? '').split(/\r?\n/);
+  const cwdIdx = lines.findIndex((l) => l.trimStart().startsWith('CWD='));
+  if (cwdIdx >= 0) {
+    lines[cwdIdx] = cwdLine;
+  } else {
+    lines.push(cwdLine);
+  }
+  let topic = lines.join('\n');
+  // Respect Discord 1024 char limit: trim older non-CWD lines from the top.
+  while (topic.length > TOPIC_MAX) {
+    const parts = topic.split('\n');
+    const removed = parts.findIndex((l) => !l.trimStart().startsWith('CWD='));
+    if (removed < 0) break; // only CWD lines remain; nothing else to trim
+    parts.splice(removed, 1);
+    topic = parts.join('\n');
+  }
+  return topic.slice(0, TOPIC_MAX);
+}
+
 function allowUser(userId: string): boolean {
   const allow = cfg.DISCORD_ALLOW_USER_IDS;
   if (!allow || allow.length === 0) return true;
@@ -42,6 +72,17 @@ async function upsertChannelCwd(channelId: string, cwd: string): Promise<void> {
   const map = await store.readJson<ChannelCwdMap>(FILE_CHANNEL_CWD, {});
   map[channelId] = { cwd, updatedAt: Date.now() };
   await store.writeJson(FILE_CHANNEL_CWD, map);
+}
+
+async function upsertChannelMainThread(channelId: string, threadId: string): Promise<void> {
+  const map = await store.readJson<ChannelMainThreadMap>(FILE_CHANNEL_MAIN_THREAD, {});
+  map[channelId] = { threadId, updatedAt: Date.now() };
+  await store.writeJson(FILE_CHANNEL_MAIN_THREAD, map);
+}
+
+async function getChannelMainThreadId(channelId: string): Promise<string | null> {
+  const map = await store.readJson<ChannelMainThreadMap>(FILE_CHANNEL_MAIN_THREAD, {});
+  return map[channelId]?.threadId ?? null;
 }
 
 async function getChannelCwd(channelId: string, topic: string | null | undefined): Promise<string | null> {
@@ -99,6 +140,66 @@ async function ensureThreadSession(oc: OpenCodeAcpClient, thread: ThreadChannel,
   const binding = { sessionId: res.sessionId, cwd, createdAt: now, updatedAt: now };
   await setThreadBinding(thread.id, binding);
   return { ok: true as const, binding };
+}
+
+async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<ThreadChannel | null> {
+  const storedId = await getChannelMainThreadId(parent.id);
+
+  const findInCollections = (coll: any, predicate: (t: ThreadChannel) => boolean): ThreadChannel | null => {
+    if (!coll) return null;
+    const threads: any = coll.threads ?? coll;
+    if (!threads) return null;
+    // discord.js collections typically have .find
+    return (threads.find?.(predicate) as ThreadChannel) ?? null;
+  };
+
+  const tryResolve = async (threadId: string): Promise<ThreadChannel | null> => {
+    try {
+      const t = (await parent.threads.fetch(threadId)) as any;
+      if (t) return t as ThreadChannel;
+    } catch {}
+
+    const active = await parent.threads.fetchActive().catch(() => null);
+    const inActive = findInCollections(active, (t) => t.id === threadId);
+    if (inActive) return inActive;
+
+    const archived = await parent.threads.fetchArchived({ limit: 50 }).catch(() => null);
+    const inArchived = findInCollections(archived, (t) => t.id === threadId);
+    if (inArchived) {
+      if ((inArchived as any).archived) await inArchived.setArchived(false).catch(() => null);
+      return inArchived;
+    }
+
+    return null;
+  };
+
+  // 1) Stored mapping
+  if (storedId) {
+    const resolved = await tryResolve(storedId);
+    if (resolved) return resolved;
+  }
+
+  // 2) Search by name
+  const active = await parent.threads.fetchActive().catch(() => null);
+  const byNameActive = findInCollections(active, (t) => t.name === 'main');
+  if (byNameActive) {
+    await upsertChannelMainThread(parent.id, byNameActive.id);
+    return byNameActive;
+  }
+
+  const archived = await parent.threads.fetchArchived({ limit: 50 }).catch(() => null);
+  const byNameArchived = findInCollections(archived, (t) => t.name === 'main');
+  if (byNameArchived) {
+    if ((byNameArchived as any).archived) await byNameArchived.setArchived(false).catch(() => null);
+    await upsertChannelMainThread(parent.id, byNameArchived.id);
+    return byNameArchived;
+  }
+
+  // 3) Create
+  const created = await m.startThread({ name: 'main', autoArchiveDuration: 1440 }).catch(() => null);
+  if (!created) return null;
+  await upsertChannelMainThread(parent.id, created.id);
+  return created;
 }
 
 async function streamToDiscord(
@@ -221,6 +322,11 @@ async function main() {
           if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
           const cwd = cix.options.getString('path', true);
           await upsertChannelCwd(parent.id, cwd);
+          const fullParent = await parent.fetch().catch(() => parent);
+          const newTopic = buildTopicWithCwd(fullParent.topic, cwd);
+          await fullParent.setTopic(newTopic).catch((e: any) => {
+            console.error('[oc-bridge] failed to set channel topic:', e?.message ?? e);
+          });
           await cix.reply({ content: `Set CWD for channel to: ${cwd}`, ephemeral: true });
         },
       });
@@ -243,14 +349,13 @@ async function main() {
       const ch = await m.channel.fetch().catch(() => m.channel);
       let { thread, parent } = getThreadAndParentChannel(ch);
 
-      // Convenience: if user talks in a configured text channel, auto-create a thread
+      // Convenience: if user talks in a configured text channel, reuse (or create) a main thread
       if (!thread && parent) {
         const cwd = await getChannelCwd(parent.id, (parent as any).topic);
         if (cfg.DISCORD_IGNORE_CHANNELS_WITHOUT_CWD && !cwd) return;
-        // Start a thread from this message so thread=session holds.
-        const created = await m.startThread({ name: 'main', autoArchiveDuration: 1440 }).catch(() => null);
-        if (!created) return;
-        thread = created;
+        const mainThread = await findOrCreateMainThread(parent, m);
+        if (!mainThread) return;
+        thread = mainThread;
       }
 
       if (!thread || !parent) return;

@@ -51,6 +51,33 @@ function logInfo(msg: string, ctx: LogCtx = {}): void {
   console.log(parts.join(' '));
 }
 
+function safeErrMeta(e: unknown): { err: string; stack?: string } {
+  if (e && typeof e === 'object') {
+    const anyE = e as any;
+    const msg = anyE?.message ? String(anyE.message) : String(e);
+    const stack = typeof anyE?.stack === 'string' ? anyE.stack : undefined;
+    return { err: msg.slice(0, 500), stack: stack ? stack.slice(0, 1500) : undefined };
+  }
+  return { err: String(e).slice(0, 500) };
+}
+
+function logError(msg: string, ctx: LogCtx & { e?: unknown } = {}): void {
+  const { e, ...rest } = ctx;
+  const meta = e ? safeErrMeta(e) : undefined;
+  const parts = [
+    '[oc-bridge]',
+    msg,
+    rest.corr ? `corr=${rest.corr}` : null,
+    rest.channelId ? `channel=${rest.channelId}` : null,
+    rest.threadId ? `thread=${rest.threadId}` : null,
+    rest.sessionId ? `session=${rest.sessionId}` : null,
+    rest.messageId ? `msg=${rest.messageId}` : null,
+    meta?.err ? `err=${meta.err}` : null,
+  ].filter(Boolean);
+  console.error(parts.join(' '));
+  if (meta?.stack) console.error(meta.stack);
+}
+
 async function retryWithBackoff<T>(
   fn: (attempt: number) => Promise<T>,
   opts: { attempts: number; baseDelayMs: number },
@@ -300,7 +327,23 @@ async function streamToDiscord(
 
 async function main() {
   const client = createDiscordClient(cfg);
-  const oc = new OpenCodeAcpClient(cfg.OPENCODE_BIN, process.cwd());
+  const oc = new OpenCodeAcpClient(cfg.OPENCODE_BIN, process.cwd(), (msg, meta) => {
+    const m = meta ?? {};
+    // Keep it line-based and secret-free; truncate noisy fields.
+    const parts = [
+      '[oc-bridge]',
+      msg,
+      typeof (m as any).pid === 'number' ? `pid=${(m as any).pid}` : null,
+      typeof (m as any).sessionId === 'string' ? `session=${(m as any).sessionId}` : null,
+      typeof (m as any).attempt === 'number' ? `attempt=${(m as any).attempt}` : null,
+      typeof (m as any).delayMs === 'number' ? `delayMs=${(m as any).delayMs}` : null,
+      typeof (m as any).code === 'number' ? `code=${(m as any).code}` : null,
+      typeof (m as any).signal === 'string' ? `signal=${(m as any).signal}` : null,
+      typeof (m as any).err === 'string' ? `err=${String((m as any).err).slice(0, 300)}` : null,
+      typeof (m as any).line === 'string' ? `line=${String((m as any).line).slice(0, 200)}` : null,
+    ].filter(Boolean);
+    console.log(parts.join(' '));
+  });
 
   if (cfg.OPENCODE_ACP_AUTOSTART) {
     await oc.start({ watchdog: true });
@@ -401,7 +444,7 @@ async function main() {
         },
       });
     } catch (e: any) {
-      console.error(e);
+      logError('interaction:error', { e });
       try {
         // @ts-ignore
         if (ix.isRepliable()) await ix.reply({ content: `Error: ${e?.message ?? String(e)}`, ephemeral: true });
@@ -460,8 +503,20 @@ async function main() {
             if (attempt > 1) {
               logInfo('prompt:retry', { corr, threadId: thread.id, sessionId, messageId: m.id });
             }
-            await oc.ensureSessionLoaded(sessionId, cwd);
-            await oc.prompt(sessionId, m.content, emit);
+            try {
+              await oc.ensureSessionLoaded(sessionId, cwd);
+              await oc.prompt(sessionId, m.content, emit);
+            } catch (e) {
+              logError('prompt:attempt_failed', {
+                corr,
+                channelId: fullParent.id,
+                threadId: thread.id,
+                sessionId,
+                messageId: m.id,
+                e,
+              });
+              throw e;
+            }
           },
           { attempts: 3, baseDelayMs: 300 },
         );
@@ -470,7 +525,7 @@ async function main() {
       const now = Date.now();
       await setThreadBinding(thread.id, { ...ensured.binding, updatedAt: now });
     } catch (e) {
-      console.error(e);
+      logError('message:error', { e });
     }
   });
 
@@ -478,6 +533,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error(e);
+  logError('fatal', { e });
   process.exit(1);
 });

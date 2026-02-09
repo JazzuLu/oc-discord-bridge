@@ -211,7 +211,7 @@ async function ensureThreadSession(oc: OpenCodeAcpClient, thread: ThreadChannel,
     return { ok: false as const, reason: 'no_cwd' as const };
   }
 
-  const res = await oc.newSession(cwd);
+  const res = await oc.newSession(cwd, { threadId: thread.id });
   const now = Date.now();
   const binding = { sessionId: res.sessionId, cwd, createdAt: now, updatedAt: now };
   await setThreadBinding(thread.id, binding);
@@ -386,7 +386,7 @@ async function main() {
           const cwd = await getChannelCwd(parent.id, parent.topic);
           if (!cwd) return void cix.reply({ content: 'No CWD configured for this channel', ephemeral: true });
           await oc.start({ watchdog: true });
-          const res = await oc.newSession(cwd);
+          const res = await oc.newSession(cwd, { threadId: thread.id });
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId: res.sessionId, cwd, createdAt: now, updatedAt: now });
           await cix.reply({ content: `Bound thread to NEW session: ${res.sessionId}`, ephemeral: true });
@@ -399,7 +399,7 @@ async function main() {
           const cwd = await getChannelCwd(parent.id, parent.topic);
           if (!cwd) return void cix.reply({ content: 'No CWD configured for this channel', ephemeral: true });
           await oc.start({ watchdog: true });
-          await oc.loadSession(sessionId, cwd);
+          await oc.loadSession(sessionId, cwd, { threadId: thread.id });
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId, cwd, createdAt: now, updatedAt: now });
           await cix.reply({ content: `Bound thread to session: ${sessionId}`, ephemeral: true });
@@ -504,8 +504,9 @@ async function main() {
               logInfo('prompt:retry', { corr, threadId: thread.id, sessionId, messageId: m.id });
             }
             try {
-              await oc.ensureSessionLoaded(sessionId, cwd);
-              await oc.prompt(sessionId, m.content, emit);
+              const meta = { corr, threadId: thread.id, channelId: fullParent.id, messageId: m.id };
+              await oc.ensureSessionLoaded(sessionId, cwd, meta);
+              await oc.prompt(sessionId, m.content, emit, meta);
             } catch (e) {
               logError('prompt:attempt_failed', {
                 corr,

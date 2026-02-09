@@ -31,6 +31,8 @@ export class OpenCodeAcpClient {
   private watchdog = true;
   private stopping = false;
   private restartAttempt = 0;
+  private restarting = false;
+  private restartQueued = false;
   private ready: Promise<void> = Promise.resolve();
 
   constructor(
@@ -79,6 +81,12 @@ export class OpenCodeAcpClient {
       try {
         this.proc?.kill('SIGTERM');
       } catch {}
+
+      // If the caller awaited start() and init failed, still allow watchdog to recover.
+      if (!this.stopping && this.watchdog) {
+        void this.restartWithBackoff();
+      }
+
       throw e;
     });
 
@@ -94,6 +102,21 @@ export class OpenCodeAcpClient {
       // The ACP server is stateful per-process; session bindings must be re-loaded.
       this.loadedSessions.clear();
 
+      if (!this.stopping && this.watchdog) {
+        void this.restartWithBackoff();
+      }
+    });
+
+    // Spawn-level error (e.g. binary missing) won't emit 'exit' consistently.
+    this.proc.on('error', (e) => {
+      this.log('acp:error', { err: (e as any)?.message ?? String(e) });
+      const err = new Error(`opencode acp error: ${(e as any)?.message ?? String(e)}`);
+      for (const { reject } of this.pending.values()) reject(err);
+      this.pending.clear();
+      this.proc = undefined;
+      this.rl?.close();
+      this.rl = undefined;
+      this.loadedSessions.clear();
       if (!this.stopping && this.watchdog) {
         void this.restartWithBackoff();
       }
@@ -142,28 +165,47 @@ export class OpenCodeAcpClient {
   }
 
   private async restartWithBackoff(): Promise<void> {
-    // Exponential backoff (bounded) + small jitter.
-    const base = Math.min(30_000, 500 * 2 ** this.restartAttempt);
-    const jitter = Math.floor(Math.random() * 250);
-    const delay = base + jitter;
-    const attempt = this.restartAttempt + 1;
-    this.restartAttempt = Math.min(this.restartAttempt + 1, 10);
+    if (this.restarting) {
+      this.restartQueued = true;
+      return;
+    }
 
-    this.log('acp:watchdog_restart_scheduled', { attempt, delayMs: delay });
-    await sleep(delay);
-
+    this.restarting = true;
     try {
-      await this.start();
-      this.log('acp:watchdog_restart_ok', { attempt });
-      this.restartAttempt = 0;
-    } catch (e) {
-      this.log('acp:watchdog_restart_failed', { attempt, err: (e as any)?.message ?? String(e) });
-      // If start/initialize fails, try again.
-      if (!this.stopping) void this.restartWithBackoff();
+      // Exponential backoff (bounded) + small jitter.
+      const base = Math.min(30_000, 500 * 2 ** this.restartAttempt);
+      const jitter = Math.floor(Math.random() * 250);
+      const delay = base + jitter;
+      const attempt = this.restartAttempt + 1;
+      this.restartAttempt = Math.min(this.restartAttempt + 1, 10);
+
+      this.log('acp:watchdog_restart_scheduled', { attempt, delayMs: delay });
+      await sleep(delay);
+
+      try {
+        await this.start();
+        this.log('acp:watchdog_restart_ok', { attempt });
+        this.restartAttempt = 0;
+      } catch (e) {
+        this.log('acp:watchdog_restart_failed', { attempt, err: (e as any)?.message ?? String(e) });
+        // Queue another attempt.
+        if (!this.stopping) this.restartQueued = true;
+      }
+    } finally {
+      this.restarting = false;
+      if (this.restartQueued && !this.stopping && this.watchdog) {
+        this.restartQueued = false;
+        void this.restartWithBackoff();
+      }
     }
   }
 
-  private send(method: string, params?: any, opts?: { timeoutMs?: number }): Promise<any> {
+  private send(
+    method: string,
+    params?: any,
+    opts?: { timeoutMs?: number },
+    meta?: Record<string, unknown>,
+  ): Promise<any> {
     if (!this.proc?.stdin) throw new Error('ACP not started');
     const id = this.nextId++;
     const msg: JsonRpc = { jsonrpc: '2.0', id, method, params };
@@ -182,7 +224,7 @@ export class OpenCodeAcpClient {
           // If ACP stops responding, force a restart (watchdog will bring it back).
           if (!this.stopping && this.watchdog) {
             try {
-              this.log('acp:request_timeout_restart', { method });
+              this.log('acp:request_timeout_restart', { method, ...(meta ?? {}) });
               this.proc?.kill('SIGTERM');
             } catch {}
           }
@@ -202,15 +244,20 @@ export class OpenCodeAcpClient {
     });
   }
 
-  async initialize(): Promise<void> {
-    await this.send('initialize', {
-      protocolVersion: 1,
-      clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: true },
-        terminal: true,
+  async initialize(meta?: Record<string, unknown>): Promise<void> {
+    await this.send(
+      'initialize',
+      {
+        protocolVersion: 1,
+        clientCapabilities: {
+          fs: { readTextFile: true, writeTextFile: true },
+          terminal: true,
+        },
+        clientInfo: { name: 'oc-discord-bridge', title: 'oc-discord-bridge', version: '0.0.1' },
       },
-      clientInfo: { name: 'oc-discord-bridge', title: 'oc-discord-bridge', version: '0.0.1' },
-    });
+      undefined,
+      meta,
+    );
   }
 
   onSessionUpdate(sessionId: string, cb: (u: AcpUpdate) => void): () => void {
@@ -226,29 +273,34 @@ export class OpenCodeAcpClient {
     };
   }
 
-  async newSession(cwd: string): Promise<{ sessionId: string }> {
-    const res = await this.send('session/new', { cwd, mcpServers: [] });
+  async newSession(cwd: string, meta?: Record<string, unknown>): Promise<{ sessionId: string }> {
+    const res = await this.send('session/new', { cwd, mcpServers: [] }, undefined, meta);
     if (res?.sessionId) {
       this.loadedSessions.add(res.sessionId);
-      this.log('acp:session_new', { sessionId: res.sessionId });
+      this.log('acp:session_new', { sessionId: res.sessionId, ...(meta ?? {}) });
     }
     return res;
   }
 
-  async loadSession(sessionId: string, cwd: string): Promise<void> {
-    this.log('acp:session_load', { sessionId });
-    await this.send('session/load', { sessionId, cwd, mcpServers: [] });
+  async loadSession(sessionId: string, cwd: string, meta?: Record<string, unknown>): Promise<void> {
+    this.log('acp:session_load', { sessionId, ...(meta ?? {}) });
+    await this.send('session/load', { sessionId, cwd, mcpServers: [] }, undefined, { sessionId, ...(meta ?? {}) });
     this.loadedSessions.add(sessionId);
   }
 
-  async ensureSessionLoaded(sessionId: string, cwd: string): Promise<void> {
+  async ensureSessionLoaded(sessionId: string, cwd: string, meta?: Record<string, unknown>): Promise<void> {
     // If ACP isn't running, wait for watchdog restart.
     await this.start();
     if (this.loadedSessions.has(sessionId)) return;
-    await this.loadSession(sessionId, cwd);
+    await this.loadSession(sessionId, cwd, meta);
   }
 
-  async prompt(sessionId: string, text: string, onChunk: (t: string) => void): Promise<void> {
+  async prompt(
+    sessionId: string,
+    text: string,
+    onChunk: (t: string) => void,
+    meta?: Record<string, unknown>,
+  ): Promise<void> {
     const off = this.onSessionUpdate(sessionId, (u) => {
       const up = u.update;
       if (up?.sessionUpdate === 'agent_message_chunk') {
@@ -264,6 +316,7 @@ export class OpenCodeAcpClient {
           prompt: [{ type: 'text', text }],
         },
         { timeoutMs: 60_000 },
+        { sessionId, ...(meta ?? {}) },
       );
     } finally {
       off();

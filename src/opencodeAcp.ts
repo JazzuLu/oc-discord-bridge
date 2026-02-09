@@ -163,13 +163,42 @@ export class OpenCodeAcpClient {
     }
   }
 
-  private send(method: string, params?: any): Promise<any> {
+  private send(method: string, params?: any, opts?: { timeoutMs?: number }): Promise<any> {
     if (!this.proc?.stdin) throw new Error('ACP not started');
     const id = this.nextId++;
     const msg: JsonRpc = { jsonrpc: '2.0', id, method, params };
     this.proc.stdin.write(JSON.stringify(msg) + '\n');
+
+    const timeoutMs = opts?.timeoutMs ?? 20_000;
+
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      let t: ReturnType<typeof setTimeout> | undefined;
+      if (timeoutMs > 0) {
+        t = setTimeout(() => {
+          this.pending.delete(id);
+          const err = new Error(`ACP request timeout: method=${method} id=${id} timeoutMs=${timeoutMs}`);
+          reject(err);
+
+          // If ACP stops responding, force a restart (watchdog will bring it back).
+          if (!this.stopping && this.watchdog) {
+            try {
+              this.log('acp:request_timeout_restart', { method });
+              this.proc?.kill('SIGTERM');
+            } catch {}
+          }
+        }, timeoutMs);
+      }
+
+      this.pending.set(id, {
+        resolve: (v) => {
+          if (t) clearTimeout(t);
+          resolve(v);
+        },
+        reject: (e) => {
+          if (t) clearTimeout(t);
+          reject(e);
+        },
+      });
     });
   }
 
@@ -228,10 +257,14 @@ export class OpenCodeAcpClient {
       }
     });
     try {
-      await this.send('session/prompt', {
-        sessionId,
-        prompt: [{ type: 'text', text }],
-      });
+      await this.send(
+        'session/prompt',
+        {
+          sessionId,
+          prompt: [{ type: 'text', text }],
+        },
+        { timeoutMs: 60_000 },
+      );
     } finally {
       off();
     }

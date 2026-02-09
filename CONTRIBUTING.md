@@ -1,50 +1,60 @@
 # Contributing
 
-Thanks for taking the time to contribute!
+Thanks for helping improve **oc-discord-bridge**.
 
-## Development
+## Scope / goals
 
-### Prereqs
+- Keep the bridge **local-first** (runs on a developer machine next to the repo(s)).
+- Prefer **safe defaults** (avoid accidentally running tools in the wrong directory, leaking secrets, or responding to the wrong Discord channel/thread).
+- Keep changes **small and auditable**.
+
+## Development setup
 
 - Node.js 20+
 - pnpm
-- `opencode` on your PATH (or set `OPENCODE_BIN`)
 
-### Install
+Install deps:
 
 ```bash
 pnpm install
 ```
 
-### Configure
-
-Copy `.env.example` to `.env` and fill in values:
-
-```bash
-cp .env.example .env
-```
-
-> Note: `.env` is intentionally gitignored. Do not commit secrets.
-
-### Run
+Run in dev mode:
 
 ```bash
 pnpm dev
 ```
 
-### Build
+Build:
 
 ```bash
 pnpm build
-pnpm start
 ```
+
+## Configuration
+
+Configuration is via `.env`.
+
+- Copy `.env.example` → `.env`
+- **Do not commit `.env`** (it may contain secrets)
+
+## Coding conventions
+
+- TypeScript, ESM (`type: module`).
+- Keep runtime dependencies minimal.
+- Prefer small, named functions over deeply nested logic.
 
 ## Pull requests
 
-- Keep PRs small and focused.
-- Prefer adding a short note to `README.md` for any user-facing behavior change.
-- Do not commit credentials or tokens. Use `.env` for local secrets.
+- Include a short summary of *why* the change is needed.
+- If behavior changes, update `README.md` accordingly.
+- Ensure `pnpm build` passes.
 
-## Reporting security issues
+## Security
 
-If you believe you found a security issue, please open an issue with minimal details and ask for a private channel to share reproduction steps.
+If you believe you’ve found a security issue, please do **not** open a public issue with exploit details.
+
+Instead, contact the maintainer privately (e.g. via Discord DM or GitHub private message) and include:
+- What you found
+- Impact
+- Steps to reproduce

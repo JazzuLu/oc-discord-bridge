@@ -29,6 +29,12 @@ const FILE_PAUSED = 'pausedChannels.json';
 
 const TOPIC_MAX = 1024;
 
+/**
+ * Per-channel lock for findOrCreateMainThread to prevent duplicate thread creation
+ * when multiple messages arrive concurrently for the same parent channel.
+ */
+const mainThreadLocks = new Map<string, Promise<ThreadChannel | null>>();
+
 function parseCwdFromTopic(topic: string | null | undefined): string | null {
   if (!topic) return null;
   const line = topic
@@ -63,6 +69,12 @@ function buildTopicWithCwd(existing: string | null | undefined, cwd: string): st
   }
 
   return topic.slice(0, TOPIC_MAX);
+}
+
+/** Tolerant check: treat "main", "main ...", "main-…", "main:…" as the canonical main thread. */
+function isMainThreadName(name: string | null | undefined): boolean {
+  const n = (name ?? '').trim().toLowerCase();
+  return n === 'main' || n.startsWith('main ') || n.startsWith('main-') || n.startsWith('main:');
 }
 
 function allowUser(userId: string): boolean {
@@ -145,7 +157,27 @@ async function ensureThreadSession(oc: OpenCodeAcpClient, thread: ThreadChannel,
   return { ok: true as const, binding };
 }
 
+/**
+ * Locked wrapper: ensures only one findOrCreate runs per parent channel at a time,
+ * preventing duplicate 'main' thread creation from concurrent messages.
+ */
 async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<ThreadChannel | null> {
+  const existing = mainThreadLocks.get(parent.id);
+  if (existing) {
+    // Another call is already in-flight for this channel; wait for it.
+    return existing;
+  }
+
+  const promise = findOrCreateMainThreadInner(parent, m);
+  mainThreadLocks.set(parent.id, promise);
+  try {
+    return await promise;
+  } finally {
+    mainThreadLocks.delete(parent.id);
+  }
+}
+
+async function findOrCreateMainThreadInner(parent: TextChannel, m: Message): Promise<ThreadChannel | null> {
   const storedId = await getChannelMainThreadId(parent.id);
 
   const findInCollections = (coll: any, predicate: (t: ThreadChannel) => boolean): ThreadChannel | null => {
@@ -195,12 +227,6 @@ async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<
     }
 
     return null;
-  };
-
-  const isMainThreadName = (name: string): boolean => {
-    const n = (name ?? '').trim().toLowerCase();
-    // Be tolerant of small naming variations.
-    return n === 'main' || n.startsWith('main ') || n.startsWith('main-') || n.startsWith('main:');
   };
 
   const findByName = async (): Promise<ThreadChannel | null> => {
@@ -402,7 +428,7 @@ async function main() {
       let { thread, parent } = getThreadAndParentChannel(ch);
 
       // If user is already in the canonical 'main' thread, remember it to avoid duplicates.
-      if (thread && parent && thread.name === 'main') {
+      if (thread && parent && isMainThreadName(thread.name)) {
         await upsertChannelMainThread(parent.id, thread.id);
       }
 

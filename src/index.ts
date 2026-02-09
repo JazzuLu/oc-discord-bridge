@@ -373,6 +373,7 @@ async function main() {
   });
 
   client.on('interactionCreate', async (ix) => {
+    const corr = randomUUID().slice(0, 8);
     try {
       if (!isInScopeGuild(cfg, ix.guildId)) return;
       await handleInteraction(ix, {
@@ -400,8 +401,23 @@ async function main() {
           if (!thread || !parent) return void cix.reply({ content: 'Run this inside a thread', ephemeral: true });
           const cwd = await getChannelCwd(parent.id, parent.topic);
           if (!cwd) return void cix.reply({ content: 'No CWD configured for this channel', ephemeral: true });
-          await oc.start({ watchdog: true });
-          const res = await oc.newSession(cwd, { threadId: thread.id });
+
+          const meta = { corr, channelId: parent.id, threadId: thread.id };
+
+          const res = await retryWithBackoff(
+            async (attempt) => {
+              await oc.start({ watchdog: true });
+              return oc.newSession(cwd, { ...meta, attempt });
+            },
+            {
+              attempts: 3,
+              baseDelayMs: 300,
+              onRetry: ({ attempt, delayMs, err }) => {
+                logError('interaction:new_session_retry_scheduled', { ...meta, attempt, delayMs, e: err });
+              },
+            },
+          );
+
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId: res.sessionId, cwd, createdAt: now, updatedAt: now });
           await cix.reply({ content: `Bound thread to NEW session: ${res.sessionId}`, ephemeral: true });
@@ -413,8 +429,23 @@ async function main() {
           const sessionId = cix.options.getString('session_id', true);
           const cwd = await getChannelCwd(parent.id, parent.topic);
           if (!cwd) return void cix.reply({ content: 'No CWD configured for this channel', ephemeral: true });
-          await oc.start({ watchdog: true });
-          await oc.loadSession(sessionId, cwd, { threadId: thread.id });
+
+          const meta = { corr, channelId: parent.id, threadId: thread.id, sessionId };
+
+          await retryWithBackoff(
+            async (attempt) => {
+              await oc.start({ watchdog: true });
+              await oc.loadSession(sessionId, cwd, { ...meta, attempt });
+            },
+            {
+              attempts: 3,
+              baseDelayMs: 300,
+              onRetry: ({ attempt, delayMs, err }) => {
+                logError('interaction:switch_session_retry_scheduled', { ...meta, attempt, delayMs, e: err });
+              },
+            },
+          );
+
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId, cwd, createdAt: now, updatedAt: now });
           await cix.reply({ content: `Bound thread to session: ${sessionId}`, ephemeral: true });

@@ -156,6 +156,10 @@ async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<
     return (threads.find?.(predicate) as ThreadChannel) ?? null;
   };
 
+  const ensureUnarchived = async (t: ThreadChannel): Promise<void> => {
+    if ((t as any).archived) await (t as any).setArchived(false).catch(() => null);
+  };
+
   const tryResolve = async (threadId: string): Promise<ThreadChannel | null> => {
     // discord.js does not support fetching a thread by id via parent.threads.fetch(threadId).
     // Use the global client channel fetch instead.
@@ -165,7 +169,7 @@ async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<
         const t = fetched as ThreadChannel;
         // Ensure it belongs to this parent channel
         if ((t as any).parentId === parent.id) {
-          if ((t as any).archived) await (t as any).setArchived(false).catch(() => null);
+          await ensureUnarchived(t);
           return t;
         }
       }
@@ -175,11 +179,44 @@ async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<
     const inActive = findInCollections(active, (t) => t.id === threadId);
     if (inActive) return inActive;
 
-    const archived = await parent.threads.fetchArchived({ limit: 100 }).catch(() => null);
-    const inArchived = findInCollections(archived, (t) => t.id === threadId);
-    if (inArchived) {
-      if ((inArchived as any).archived) await inArchived.setArchived(false).catch(() => null);
-      return inArchived;
+    // Archived thread listing is paginated; scan a bit deeper to avoid duplicates.
+    let before: string | undefined = undefined;
+    for (let i = 0; i < 5; i++) {
+      const page = await parent.threads.fetchArchived({ limit: 100, before } as any).catch(() => null);
+      const inPage = findInCollections(page, (t) => t.id === threadId);
+      if (inPage) {
+        await ensureUnarchived(inPage);
+        return inPage;
+      }
+      const pageThreads: any = (page as any)?.threads ?? page;
+      const last = pageThreads?.last?.() as ThreadChannel | undefined;
+      if (!last) break;
+      before = last.id;
+    }
+
+    return null;
+  };
+
+  const isMainThreadName = (name: string): boolean => {
+    const n = (name ?? '').trim().toLowerCase();
+    // Be tolerant of small naming variations.
+    return n === 'main' || n.startsWith('main ') || n.startsWith('main-') || n.startsWith('main:');
+  };
+
+  const findByName = async (): Promise<ThreadChannel | null> => {
+    const active = await parent.threads.fetchActive().catch(() => null);
+    const byNameActive = findInCollections(active, (t) => isMainThreadName(t.name));
+    if (byNameActive) return byNameActive;
+
+    let before: string | undefined = undefined;
+    for (let i = 0; i < 5; i++) {
+      const page = await parent.threads.fetchArchived({ limit: 100, before } as any).catch(() => null);
+      const byName = findInCollections(page, (t) => isMainThreadName(t.name));
+      if (byName) return byName;
+      const pageThreads: any = (page as any)?.threads ?? page;
+      const last = pageThreads?.last?.() as ThreadChannel | undefined;
+      if (!last) break;
+      before = last.id;
     }
 
     return null;
@@ -191,20 +228,12 @@ async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<
     if (resolved) return resolved;
   }
 
-  // 2) Search by name
-  const active = await parent.threads.fetchActive().catch(() => null);
-  const byNameActive = findInCollections(active, (t) => t.name === 'main');
-  if (byNameActive) {
-    await upsertChannelMainThread(parent.id, byNameActive.id);
-    return byNameActive;
-  }
-
-  const archived = await parent.threads.fetchArchived({ limit: 100 }).catch(() => null);
-  const byNameArchived = findInCollections(archived, (t) => t.name === 'main');
-  if (byNameArchived) {
-    if ((byNameArchived as any).archived) await byNameArchived.setArchived(false).catch(() => null);
-    await upsertChannelMainThread(parent.id, byNameArchived.id);
-    return byNameArchived;
+  // 2) Search by (tolerant) name
+  const existing = await findByName();
+  if (existing) {
+    await ensureUnarchived(existing);
+    await upsertChannelMainThread(parent.id, existing.id);
+    return existing;
   }
 
   // 3) Create

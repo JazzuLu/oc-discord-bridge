@@ -1,17 +1,25 @@
 # Contributing
 
-Thanks for contributing!
+Thanks for taking the time to contribute!
 
 ## Development setup
 
 Prereqs:
 - Node.js 20+
 - pnpm
+- `opencode` available on your PATH (or set `OPENCODE_BIN`)
 
-Install deps:
+Install:
 
 ```bash
 pnpm install
+```
+
+Run (dev):
+
+```bash
+cp .env.example .env
+pnpm dev
 ```
 
 Build:
@@ -20,30 +28,19 @@ Build:
 pnpm build
 ```
 
-Dev mode (watch):
-
-```bash
-pnpm dev
-```
-
 ## Project conventions
 
-- Keep the bridge safe-by-default (ignore channels without an explicit CWD, allowlist support, etc.).
-- Prefer small, reviewable PRs.
-- Avoid adding heavy dependencies unless clearly justified.
+- **Channel → CWD mapping** is configured via Discord channel topic `CWD=/absolute/path`.
+- **Thread = session**: one Discord thread maps to one OpenCode session id.
+- Prefer small, reviewable commits.
 
-## Submitting changes
+## Pull requests
 
-1. Fork the repo and create a feature branch.
-2. Make your changes.
-3. Ensure `pnpm build` passes.
-4. Open a PR with a clear description and rationale.
+- Keep PRs focused.
+- Update the README if behavior / setup changes.
+- Ensure `pnpm build` passes.
 
-## Reporting security issues
+## Security
 
-If you believe you have found a security vulnerability, please **do not** open a public issue.
-
-Instead, contact the maintainer privately with:
-- steps to reproduce
-- impact assessment
-- suggested fix (if you have one)
+- Never commit real tokens or secrets.
+- Use `.env` locally; it is git-ignored.

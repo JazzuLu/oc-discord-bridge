@@ -333,6 +333,10 @@ async function main() {
     const parts = [
       '[oc-bridge]',
       msg,
+      typeof (m as any).corr === 'string' ? `corr=${String((m as any).corr).slice(0, 32)}` : null,
+      typeof (m as any).channelId === 'string' ? `channel=${(m as any).channelId}` : null,
+      typeof (m as any).threadId === 'string' ? `thread=${(m as any).threadId}` : null,
+      typeof (m as any).messageId === 'string' ? `msg=${(m as any).messageId}` : null,
       typeof (m as any).pid === 'number' ? `pid=${(m as any).pid}` : null,
       typeof (m as any).sessionId === 'string' ? `session=${(m as any).sessionId}` : null,
       typeof (m as any).attempt === 'number' ? `attempt=${(m as any).attempt}` : null,

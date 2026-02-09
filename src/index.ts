@@ -36,6 +36,8 @@ type LogCtx = {
   sessionId?: string;
   channelId?: string;
   messageId?: string;
+  attempt?: number;
+  delayMs?: number;
 };
 
 function logInfo(msg: string, ctx: LogCtx = {}): void {
@@ -47,6 +49,8 @@ function logInfo(msg: string, ctx: LogCtx = {}): void {
     ctx.threadId ? `thread=${ctx.threadId}` : null,
     ctx.sessionId ? `session=${ctx.sessionId}` : null,
     ctx.messageId ? `msg=${ctx.messageId}` : null,
+    typeof ctx.attempt === 'number' ? `attempt=${ctx.attempt}` : null,
+    typeof ctx.delayMs === 'number' ? `delayMs=${ctx.delayMs}` : null,
   ].filter(Boolean);
   console.log(parts.join(' '));
 }
@@ -72,6 +76,8 @@ function logError(msg: string, ctx: LogCtx & { e?: unknown } = {}): void {
     rest.threadId ? `thread=${rest.threadId}` : null,
     rest.sessionId ? `session=${rest.sessionId}` : null,
     rest.messageId ? `msg=${rest.messageId}` : null,
+    typeof (rest as any).attempt === 'number' ? `attempt=${(rest as any).attempt}` : null,
+    typeof (rest as any).delayMs === 'number' ? `delayMs=${(rest as any).delayMs}` : null,
     meta?.err ? `err=${meta.err}` : null,
   ].filter(Boolean);
   console.error(parts.join(' '));
@@ -80,7 +86,11 @@ function logError(msg: string, ctx: LogCtx & { e?: unknown } = {}): void {
 
 async function retryWithBackoff<T>(
   fn: (attempt: number) => Promise<T>,
-  opts: { attempts: number; baseDelayMs: number },
+  opts: {
+    attempts: number;
+    baseDelayMs: number;
+    onRetry?: (info: { attempt: number; delayMs: number; err: unknown }) => void;
+  },
 ): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 1; attempt <= opts.attempts; attempt++) {
@@ -92,6 +102,7 @@ async function retryWithBackoff<T>(
       const base = opts.baseDelayMs * 2 ** (attempt - 1);
       const jitter = Math.floor(Math.random() * 150);
       const delay = Math.min(5_000, base + jitter);
+      opts.onRetry?.({ attempt, delayMs: delay, err: e });
       // eslint-disable-next-line no-await-in-loop
       await new Promise((r) => setTimeout(r, delay));
     }
@@ -502,34 +513,36 @@ async function main() {
       });
 
       await streamToDiscord(m, async (emit) => {
+        const meta = {
+          corr,
+          threadId: thread.id,
+          channelId: fullParent.id,
+          messageId: m.id,
+          sessionId,
+        };
+
         await retryWithBackoff(
           async (attempt) => {
             if (attempt > 1) {
-              logInfo('prompt:retry', { corr, threadId: thread.id, sessionId, messageId: m.id });
+              logInfo('prompt:retry', { ...meta, attempt });
             }
             try {
-              const meta = {
-                corr,
-                threadId: thread.id,
-                channelId: fullParent.id,
-                messageId: m.id,
-                sessionId,
-              };
-              await oc.ensureSessionLoaded(sessionId, cwd, meta);
-              await oc.prompt(sessionId, m.content, emit, meta);
+              // If ACP restarted, ensure the session binding is re-loaded before prompting.
+              await oc.ensureSessionLoaded(sessionId, cwd, { ...meta, attempt });
+              await oc.prompt(sessionId, m.content, emit, { ...meta, attempt });
             } catch (e) {
-              logError('prompt:attempt_failed', {
-                corr,
-                channelId: fullParent.id,
-                threadId: thread.id,
-                sessionId,
-                messageId: m.id,
-                e,
-              });
+              logError('prompt:attempt_failed', { ...meta, e });
               throw e;
             }
           },
-          { attempts: 3, baseDelayMs: 300 },
+          {
+            attempts: 3,
+            baseDelayMs: 300,
+            onRetry: ({ attempt, delayMs, err }) => {
+              // Log retry scheduling with correlation ids (no secrets).
+              logError('prompt:retry_scheduled', { ...meta, attempt, delayMs, e: err });
+            },
+          },
         );
       });
 

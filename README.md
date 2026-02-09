@@ -78,7 +78,7 @@ See: [`.env.example`](./.env.example)
 In a Discord text channel, set the channel topic to include a line like:
 
 ```
-CWD=/Users/pancraslu/WorkingPlace/Joto/wenshu
+CWD=/absolute/path/to/your/project
 ```
 
 Notes:

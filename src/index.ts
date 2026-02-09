@@ -508,7 +508,13 @@ async function main() {
               logInfo('prompt:retry', { corr, threadId: thread.id, sessionId, messageId: m.id });
             }
             try {
-              const meta = { corr, threadId: thread.id, channelId: fullParent.id, messageId: m.id };
+              const meta = {
+                corr,
+                threadId: thread.id,
+                channelId: fullParent.id,
+                messageId: m.id,
+                sessionId,
+              };
               await oc.ensureSessionLoaded(sessionId, cwd, meta);
               await oc.prompt(sessionId, m.content, emit, meta);
             } catch (e) {

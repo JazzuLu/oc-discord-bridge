@@ -276,7 +276,7 @@ export class OpenCodeAcpClient {
           // If ACP stops responding, force a restart (watchdog will bring it back).
           if (!this.stopping && this.watchdog) {
             try {
-              this.log('acp:request_timeout_restart', this.m({ method, ...(meta ?? {}) }));
+              this.log('acp:request_timeout_restart', this.m({ method, id, timeoutMs, ...(meta ?? {}) }));
               this.proc?.kill('SIGTERM');
             } catch {}
           }
@@ -359,6 +359,7 @@ export class OpenCodeAcpClient {
     meta?: Record<string, unknown>,
   ): Promise<void> {
     this.rememberMeta(meta);
+
     const off = this.onSessionUpdate(sessionId, (u) => {
       const up = u.update;
       if (up?.sessionUpdate === 'agent_message_chunk') {
@@ -366,16 +367,36 @@ export class OpenCodeAcpClient {
         if (typeof t === 'string') onChunk(t);
       }
     });
+
     try {
-      await this.send(
-        'session/prompt',
-        {
-          sessionId,
-          prompt: [{ type: 'text', text }],
-        },
-        { timeoutMs: 60_000 },
-        this.m({ sessionId, ...(meta ?? {}) }),
-      );
+      // Bounded retry: ACP can be mid-restart or briefly unavailable.
+      // Higher-level callers also retry; this is a last-mile hedge.
+      let lastErr: unknown;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          await this.send(
+            'session/prompt',
+            {
+              sessionId,
+              prompt: [{ type: 'text', text }],
+            },
+            { timeoutMs: 60_000 },
+            this.m({ sessionId, attempt, ...(meta ?? {}) }),
+          );
+          return;
+        } catch (e) {
+          lastErr = e;
+          if (attempt >= 2) break;
+
+          this.log('acp:prompt_retry', this.m({ sessionId, attempt, err: (e as any)?.message ?? String(e), ...(meta ?? {}) }));
+
+          // Small backoff + give watchdog a chance to restart.
+          const jitter = Math.floor(Math.random() * 100);
+          await sleep(250 + jitter);
+          await this.start();
+        }
+      }
+      throw lastErr;
     } finally {
       off();
     }

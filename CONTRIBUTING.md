@@ -1,30 +1,50 @@
 # Contributing
 
-Thanks for your interest in contributing!
+Thanks for taking the time to contribute!
 
-## Quick start
+## Development
 
-- Use Node.js + pnpm.
-- Install deps: `pnpm i`
-- Build: `pnpm build`
-- Dev: `pnpm dev`
+### Prereqs
 
-## Development notes
+- Node.js 20+
+- pnpm
+- `opencode` on your PATH (or set `OPENCODE_BIN`)
 
-- This bridge is intentionally conservative about **scope**:
-  - Optionally restrict to a single guild (`DISCORD_GUILD_ID`).
-  - Optionally restrict to allowlisted users (`DISCORD_ALLOW_USER_IDS`).
-  - By default, it ignores channels that don’t have a `CWD=` mapping.
-- Keep logs secret-free. Don’t print env vars or tokens.
+### Install
+
+```bash
+pnpm install
+```
+
+### Configure
+
+Copy `.env.example` to `.env` and fill in values:
+
+```bash
+cp .env.example .env
+```
+
+> Note: `.env` is intentionally gitignored. Do not commit secrets.
+
+### Run
+
+```bash
+pnpm dev
+```
+
+### Build
+
+```bash
+pnpm build
+pnpm start
+```
 
 ## Pull requests
 
-1. Create a topic branch.
-2. Keep PRs small and focused.
-3. Ensure `pnpm build` passes.
-4. Update README if behavior/UX changes.
+- Keep PRs small and focused.
+- Prefer adding a short note to `README.md` for any user-facing behavior change.
+- Do not commit credentials or tokens. Use `.env` for local secrets.
 
-## Security
+## Reporting security issues
 
-If you believe you’ve found a security issue, please do **not** open a public issue.
-Instead, contact the maintainer privately.
+If you believe you found a security issue, please open an issue with minimal details and ask for a private channel to share reproduction steps.

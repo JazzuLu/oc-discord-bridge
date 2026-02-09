@@ -1,41 +1,46 @@
 # Contributing
 
-Thanks for your interest in contributing!
+Thanks for taking the time to contribute.
 
-## Development setup
+## Quick start
 
-Prereqs:
-- Node.js 20+
-- pnpm
-- (optional) `opencode` on your PATH (or set `OPENCODE_BIN`)
-
-Steps:
+- Requires Node.js 20+
+- Uses `pnpm`
 
 ```bash
 pnpm install
-cp .env.example .env
-pnpm dev
-```
-
-Build:
-
-```bash
 pnpm build
 ```
 
-Run the built output:
+## Development
 
 ```bash
-pnpm start
+pnpm dev
 ```
 
-## Repo conventions
+## Testing
 
-- Keep `.env` **out of git**. If you need new config, update `.env.example` instead.
-- Prefer small, reviewable PRs.
-- If you change behavior, update `README.md` (especially the slash commands / CWD mapping sections).
+There are currently no automated tests. CI runs typecheck/build.
+
+## Code style
+
+- Keep changes small and easy to review.
+- Prefer explicit, boring code over cleverness.
+- Avoid adding new runtime dependencies unless there’s a clear reason.
 
 ## Security
 
-If you find a security issue, please do **not** open a public issue with details.
-Instead, contact the maintainer privately.
+- **Never commit secrets** (Discord bot tokens, private keys, etc.).
+- Use `.env` locally; keep `.env.example` up to date.
+- If you suspect a token was committed, rotate it immediately.
+
+## Submitting changes
+
+1. Create a branch.
+2. Make your change.
+3. Ensure `pnpm build` passes.
+4. Open a PR describing the motivation and approach.
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the MIT License.

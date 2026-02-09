@@ -1,5 +1,10 @@
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
+import { setTimeout as sleep } from 'node:timers/promises';
+
+type StartOptions = {
+  watchdog?: boolean;
+};
 
 export type JsonRpc = {
   jsonrpc: '2.0';
@@ -21,15 +26,25 @@ export class OpenCodeAcpClient {
   private nextId = 0;
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
   private updates = new Map<string, ((u: AcpUpdate) => void)[]>();
+  private loadedSessions = new Set<string>();
+
+  private watchdog = true;
+  private stopping = false;
+  private restartAttempt = 0;
+  private ready: Promise<void> = Promise.resolve();
 
   constructor(private bin: string, private cwd: string) {}
-
-  start(): void {
-    if (this.proc) return;
+  async start(opts?: StartOptions): Promise<void> {
+    if (typeof opts?.watchdog === 'boolean') this.watchdog = opts.watchdog;
+    if (this.proc) return await this.ready;
+    this.stopping = false;
     this.proc = spawn(this.bin, ['acp', '--cwd', this.cwd], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: process.env,
     });
+
+    // Always (re-)initialize on (re)start.
+    this.ready = this.initialize();
 
     this.proc.on('exit', (code, signal) => {
       const err = new Error(`opencode acp exited: code=${code} signal=${signal}`);
@@ -38,6 +53,13 @@ export class OpenCodeAcpClient {
       this.proc = undefined;
       this.rl?.close();
       this.rl = undefined;
+
+      // The ACP server is stateful per-process; session bindings must be re-loaded.
+      this.loadedSessions.clear();
+
+      if (!this.stopping && this.watchdog) {
+        void this.restartWithBackoff();
+      }
     });
 
     this.rl = readline.createInterface({ input: this.proc.stdout! });
@@ -64,10 +86,30 @@ export class OpenCodeAcpClient {
         for (const cb of arr) cb(payload);
       }
     });
+
+    // Wait for initialize to finish before returning.
+    await this.ready;
   }
 
   stop(): void {
+    this.stopping = true;
     this.proc?.kill('SIGTERM');
+  }
+
+  private async restartWithBackoff(): Promise<void> {
+    // Exponential backoff (bounded) + small jitter.
+    const base = Math.min(30_000, 500 * 2 ** this.restartAttempt);
+    const jitter = Math.floor(Math.random() * 250);
+    const delay = base + jitter;
+    this.restartAttempt = Math.min(this.restartAttempt + 1, 10);
+    await sleep(delay);
+    try {
+      await this.start();
+      this.restartAttempt = 0;
+    } catch {
+      // If start/initialize fails, try again.
+      if (!this.stopping) void this.restartWithBackoff();
+    }
   }
 
   private send(method: string, params?: any): Promise<any> {
@@ -105,11 +147,21 @@ export class OpenCodeAcpClient {
   }
 
   async newSession(cwd: string): Promise<{ sessionId: string }> {
-    return await this.send('session/new', { cwd, mcpServers: [] });
+    const res = await this.send('session/new', { cwd, mcpServers: [] });
+    if (res?.sessionId) this.loadedSessions.add(res.sessionId);
+    return res;
   }
 
   async loadSession(sessionId: string, cwd: string): Promise<void> {
     await this.send('session/load', { sessionId, cwd, mcpServers: [] });
+    this.loadedSessions.add(sessionId);
+  }
+
+  async ensureSessionLoaded(sessionId: string, cwd: string): Promise<void> {
+    // If ACP isn't running, wait for watchdog restart.
+    await this.start();
+    if (this.loadedSessions.has(sessionId)) return;
+    await this.loadSession(sessionId, cwd);
   }
 
   async prompt(sessionId: string, text: string, onChunk: (t: string) => void): Promise<void> {

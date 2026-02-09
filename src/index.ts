@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { randomUUID } from 'node:crypto';
 // Be explicit: tsx/Node cwd differences can make dotenv/config miss the file.
 dotenv.config({ path: new URL('../.env', import.meta.url) });
 import { loadConfig } from './config.js';
@@ -28,6 +29,48 @@ const FILE_THREAD_SESSION = 'threadSession.json';
 const FILE_PAUSED = 'pausedChannels.json';
 
 const TOPIC_MAX = 1024;
+
+type LogCtx = {
+  corr?: string;
+  threadId?: string;
+  sessionId?: string;
+  channelId?: string;
+  messageId?: string;
+};
+
+function logInfo(msg: string, ctx: LogCtx = {}): void {
+  const parts = [
+    '[oc-bridge]',
+    msg,
+    ctx.corr ? `corr=${ctx.corr}` : null,
+    ctx.channelId ? `channel=${ctx.channelId}` : null,
+    ctx.threadId ? `thread=${ctx.threadId}` : null,
+    ctx.sessionId ? `session=${ctx.sessionId}` : null,
+    ctx.messageId ? `msg=${ctx.messageId}` : null,
+  ].filter(Boolean);
+  console.log(parts.join(' '));
+}
+
+async function retryWithBackoff<T>(
+  fn: (attempt: number) => Promise<T>,
+  opts: { attempts: number; baseDelayMs: number },
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= opts.attempts; attempt++) {
+    try {
+      return await fn(attempt);
+    } catch (e) {
+      lastErr = e;
+      if (attempt >= opts.attempts) break;
+      const base = opts.baseDelayMs * 2 ** (attempt - 1);
+      const jitter = Math.floor(Math.random() * 150);
+      const delay = Math.min(5_000, base + jitter);
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
 
 function parseCwdFromTopic(topic: string | null | undefined): string | null {
   if (!topic) return null;
@@ -130,9 +173,12 @@ async function ensureThreadSession(oc: OpenCodeAcpClient, thread: ThreadChannel,
   }
 
   if (existing && existing.cwd && existing.sessionId) {
-    // optimistic: assume still valid; load lazily only if needed later
+    // optimistic: assume still valid; we'll session/load right before prompting.
     return { ok: true as const, binding: existing };
   }
+
+  // Ensure ACP is running before creating a new session.
+  await oc.start({ watchdog: true });
 
   if (!cwd) {
     return { ok: false as const, reason: 'no_cwd' as const };
@@ -257,8 +303,7 @@ async function main() {
   const oc = new OpenCodeAcpClient(cfg.OPENCODE_BIN, process.cwd());
 
   if (cfg.OPENCODE_ACP_AUTOSTART) {
-    oc.start();
-    await oc.initialize();
+    await oc.start({ watchdog: true });
   }
 
   client.on('ready', async () => {
@@ -297,6 +342,7 @@ async function main() {
           if (!thread || !parent) return void cix.reply({ content: 'Run this inside a thread', ephemeral: true });
           const cwd = await getChannelCwd(parent.id, parent.topic);
           if (!cwd) return void cix.reply({ content: 'No CWD configured for this channel', ephemeral: true });
+          await oc.start({ watchdog: true });
           const res = await oc.newSession(cwd);
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId: res.sessionId, cwd, createdAt: now, updatedAt: now });
@@ -309,6 +355,7 @@ async function main() {
           const sessionId = cix.options.getString('session_id', true);
           const cwd = await getChannelCwd(parent.id, parent.topic);
           if (!cwd) return void cix.reply({ content: 'No CWD configured for this channel', ephemeral: true });
+          await oc.start({ watchdog: true });
           await oc.loadSession(sessionId, cwd);
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId, cwd, createdAt: now, updatedAt: now });
@@ -368,6 +415,8 @@ async function main() {
       if (cfg.DISCORD_IGNORE_BOTS && m.author.bot) return;
       if (!allowUser(m.author.id)) return;
 
+      const corr = randomUUID().slice(0, 8);
+
       // Ensure we have full channel objects (topics on parents are often missing on partials)
       const ch = await m.channel.fetch().catch(() => m.channel);
       let { thread, parent } = getThreadAndParentChannel(ch);
@@ -396,8 +445,26 @@ async function main() {
       const ensured = await ensureThreadSession(oc, thread, fullParent);
       if (!ensured.ok) return;
 
+      const { sessionId, cwd } = ensured.binding;
+      logInfo('prompt:start', {
+        corr,
+        channelId: fullParent.id,
+        threadId: thread.id,
+        sessionId,
+        messageId: m.id,
+      });
+
       await streamToDiscord(m, async (emit) => {
-        await oc.prompt(ensured.binding.sessionId, m.content, emit);
+        await retryWithBackoff(
+          async (attempt) => {
+            if (attempt > 1) {
+              logInfo('prompt:retry', { corr, threadId: thread.id, sessionId, messageId: m.id });
+            }
+            await oc.ensureSessionLoaded(sessionId, cwd);
+            await oc.prompt(sessionId, m.content, emit);
+          },
+          { attempts: 3, baseDelayMs: 300 },
+        );
       });
 
       const now = Date.now();

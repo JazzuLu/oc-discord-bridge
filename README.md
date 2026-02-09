@@ -1,22 +1,77 @@
 # oc-discord-bridge
 
-Discord ↔ OpenCode (opencode) bridge running locally on Pancras' Mac.
+A local Discord ↔ OpenCode (`opencode`) bridge.
 
-## Goals
-- Channel topic declares project root: `CWD=/absolute/path`
-- Thread = OpenCode session (context preserved)
-- Out-of-band control via slash commands (escape hatch)
+Core ideas:
+- **Channel → CWD mapping** via channel topic (`CWD=/absolute/path`).
+- **Thread = OpenCode session** (one thread keeps one session context).
+- **Slash commands** provide an escape hatch / admin controls.
 
-## Local dev
-1. Create `.env` (see `.env.example`)
-2. Install deps: `pnpm i`
-3. Run: `pnpm dev`
+## Setup
 
-## Config via channel topic
-Set channel topic to include a line like:
+### Prereqs
+- Node.js (recommended: 20+)
+- pnpm
+- `opencode` available on your PATH (or configure `OPENCODE_BIN`).
+
+### Install
+
+```bash
+pnpm i
+```
+
+### Configure
+
+1. Create `.env` (see `.env.example`).
+2. Run:
+
+```bash
+pnpm dev
+```
+
+For production-ish local use:
+
+```bash
+pnpm build
+pnpm start
+```
+
+## Channel topic → CWD mapping
+
+In a Discord text channel, set the channel topic to include a line like:
 
 ```
 CWD=/Users/pancraslu/WorkingPlace/Joto/wenshu
 ```
 
-Channels without `CWD=` are ignored by default (safety).
+Notes:
+- The bridge looks for the **first** line starting with `CWD=`.
+- By default, channels without `CWD=` are ignored (safety).
+- You can also set CWD using `/oc cwd path:<ABSOLUTE_PATH>` (it will try to update the topic and also cache the value).
+
+## Thread = session
+
+- Messages are forwarded from a thread to the OpenCode session bound to that thread.
+- If you talk in the parent text channel (not in a thread), the bridge will find or create a `main` thread and use it.
+
+## Slash commands
+
+Guild-scoped commands (registered only when `DISCORD_GUILD_ID` is set):
+
+- `/oc status` — show channel/thread/session mapping status (ephemeral)
+- `/oc new` — bind current thread to a **new** OpenCode session (ephemeral)
+- `/oc switch session_id:<id>` — bind current thread to an existing session (ephemeral)
+- `/oc pause` — pause forwarding in this channel (ephemeral)
+- `/oc resume` — resume forwarding in this channel (ephemeral)
+- `/oc cwd path:<ABSOLUTE_PATH>` — set the channel CWD (tries to update topic) (ephemeral)
+
+## CI
+
+GitHub Actions runs `pnpm install --frozen-lockfile` + `pnpm build` on pushes and PRs.
+
+## Security / safety defaults
+
+- `.env` is ignored by git.
+- Optional allowlist: `DISCORD_ALLOW_USER_IDS`.
+- Optional guild scope: `DISCORD_GUILD_ID`.
+- By default, the bridge ignores channels without `CWD=` (`DISCORD_IGNORE_CHANNELS_WITHOUT_CWD=true`).

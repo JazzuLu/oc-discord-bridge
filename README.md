@@ -34,6 +34,8 @@ Core ideas:
 pnpm install
 ```
 
+> Tip: keep your real secrets only in `.env` (ignored by git). If you add new config knobs, update `.env.example`.
+
 ### Configure
 
 1. Copy `.env.example` → `.env` and fill in values:

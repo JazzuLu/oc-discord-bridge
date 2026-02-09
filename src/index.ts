@@ -211,6 +211,8 @@ async function ensureThreadSession(oc: OpenCodeAcpClient, thread: ThreadChannel,
   }
 
   if (existing && existing.cwd && existing.sessionId) {
+    // Remember this binding so watchdog restarts can re-load it proactively.
+    oc.trackSession(existing.sessionId, existing.cwd, { threadId: thread.id, channelId: parent.id });
     // optimistic: assume still valid; we'll session/load right before prompting.
     return { ok: true as const, binding: existing };
   }

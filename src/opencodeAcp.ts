@@ -75,6 +75,14 @@ export class OpenCodeAcpClient {
     this.desiredSessions.set(sessionId, { cwd, meta });
   }
 
+  /**
+   * Track a known session binding so it can be re-loaded after ACP restarts.
+   * This does not load the session immediately; call ensureSessionLoaded/loadSession when needed.
+   */
+  trackSession(sessionId: string, cwd: string, meta?: Record<string, unknown>): void {
+    this.registerDesiredSession(sessionId, cwd, meta);
+  }
+
   async start(opts?: StartOptions): Promise<void> {
     if (typeof opts?.watchdog === 'boolean') this.watchdog = opts.watchdog;
 

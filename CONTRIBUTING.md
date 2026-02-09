@@ -1,15 +1,10 @@
 # Contributing
 
-Thanks for helping improve **oc-discord-bridge**.
-
-## Scope / goals
-
-- Keep the bridge **local-first** (runs on a developer machine next to the repo(s)).
-- Prefer **safe defaults** (avoid accidentally running tools in the wrong directory, leaking secrets, or responding to the wrong Discord channel/thread).
-- Keep changes **small and auditable**.
+Thanks for contributing!
 
 ## Development setup
 
+Prereqs:
 - Node.js 20+
 - pnpm
 
@@ -19,42 +14,36 @@ Install deps:
 pnpm install
 ```
 
-Run in dev mode:
-
-```bash
-pnpm dev
-```
-
 Build:
 
 ```bash
 pnpm build
 ```
 
-## Configuration
+Dev mode (watch):
 
-Configuration is via `.env`.
+```bash
+pnpm dev
+```
 
-- Copy `.env.example` → `.env`
-- **Do not commit `.env`** (it may contain secrets)
+## Project conventions
 
-## Coding conventions
+- Keep the bridge safe-by-default (ignore channels without an explicit CWD, allowlist support, etc.).
+- Prefer small, reviewable PRs.
+- Avoid adding heavy dependencies unless clearly justified.
 
-- TypeScript, ESM (`type: module`).
-- Keep runtime dependencies minimal.
-- Prefer small, named functions over deeply nested logic.
+## Submitting changes
 
-## Pull requests
+1. Fork the repo and create a feature branch.
+2. Make your changes.
+3. Ensure `pnpm build` passes.
+4. Open a PR with a clear description and rationale.
 
-- Include a short summary of *why* the change is needed.
-- If behavior changes, update `README.md` accordingly.
-- Ensure `pnpm build` passes.
+## Reporting security issues
 
-## Security
+If you believe you have found a security vulnerability, please **do not** open a public issue.
 
-If you believe you’ve found a security issue, please do **not** open a public issue with exploit details.
-
-Instead, contact the maintainer privately (e.g. via Discord DM or GitHub private message) and include:
-- What you found
-- Impact
-- Steps to reproduce
+Instead, contact the maintainer privately with:
+- steps to reproduce
+- impact assessment
+- suggested fix (if you have one)

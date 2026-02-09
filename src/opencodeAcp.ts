@@ -253,7 +253,7 @@ export class OpenCodeAcpClient {
       await sleep(delay);
 
       try {
-        await this.start();
+        await this.start({ watchdog: true });
         this.log('acp:watchdog_restart_ok', this.m({ attempt }));
         this.restartAttempt = 0;
       } catch (e) {
@@ -374,7 +374,7 @@ export class OpenCodeAcpClient {
     this.registerDesiredSession(sessionId, cwd, meta);
 
     // If ACP isn't running, wait for watchdog restart.
-    await this.start();
+    await this.start({ watchdog: true });
     if (this.loadedSessions.has(sessionId)) return;
     await this.loadSession(sessionId, cwd, meta);
   }
@@ -426,7 +426,7 @@ export class OpenCodeAcpClient {
 
           // Backoff + give watchdog a chance to restart.
           await sleep(delay);
-          await this.start();
+          await this.start({ watchdog: true });
         }
       }
       throw lastErr;

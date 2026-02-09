@@ -20,13 +20,26 @@ export type AcpUpdate = {
   update: any;
 };
 
+type DesiredSession = {
+  cwd: string;
+  meta?: Record<string, unknown>;
+};
+
 export class OpenCodeAcpClient {
   private proc?: ReturnType<typeof spawn>;
   private rl?: readline.Interface;
   private nextId = 0;
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
   private updates = new Map<string, ((u: AcpUpdate) => void)[]>();
+
+  /** Session IDs that are loaded into the current ACP process instance. */
   private loadedSessions = new Set<string>();
+
+  /** Session IDs that the app expects to exist and be reloadable after ACP restarts. */
+  private desiredSessions = new Map<string, DesiredSession>();
+
+  /** Best-effort correlation meta for logs that happen outside a request context (watchdog, exit, etc.). */
+  private lastMeta: Record<string, unknown> | undefined;
 
   private watchdog = true;
   private stopping = false;
@@ -47,6 +60,21 @@ export class OpenCodeAcpClient {
     },
   ) {}
 
+  private rememberMeta(meta?: Record<string, unknown>): void {
+    if (!meta) return;
+    // keep it shallow and small
+    this.lastMeta = { ...(this.lastMeta ?? {}), ...meta };
+  }
+
+  private m(meta?: Record<string, unknown>): Record<string, unknown> {
+    return { ...(this.lastMeta ?? {}), ...(meta ?? {}) };
+  }
+
+  private registerDesiredSession(sessionId: string, cwd: string, meta?: Record<string, unknown>): void {
+    this.rememberMeta(meta);
+    this.desiredSessions.set(sessionId, { cwd, meta });
+  }
+
   async start(opts?: StartOptions): Promise<void> {
     if (typeof opts?.watchdog === 'boolean') this.watchdog = opts.watchdog;
 
@@ -56,7 +84,7 @@ export class OpenCodeAcpClient {
         await this.ready;
         return;
       } catch (e) {
-        this.log('acp:ready_failed', { err: (e as any)?.message ?? String(e) });
+        this.log('acp:ready_failed', this.m({ err: (e as any)?.message ?? String(e) }));
         this.proc.kill('SIGTERM');
         this.proc = undefined;
         this.rl?.close();
@@ -72,26 +100,28 @@ export class OpenCodeAcpClient {
       env: process.env,
     });
 
-    this.log('acp:spawn', { pid: this.proc.pid });
+    this.log('acp:spawn', this.m({ pid: this.proc.pid }));
 
     // Always (re-)initialize on (re)start.
-    this.ready = this.initialize().catch((e) => {
-      this.log('acp:init_failed', { err: (e as any)?.message ?? String(e) });
-      // If init fails, ensure this proc doesn't linger in a half-ready state.
-      try {
-        this.proc?.kill('SIGTERM');
-      } catch {}
+    this.ready = this.initialize(this.lastMeta)
+      .then(() => this.reloadDesiredSessions())
+      .catch((e) => {
+        this.log('acp:init_failed', this.m({ err: (e as any)?.message ?? String(e) }));
+        // If init fails, ensure this proc doesn't linger in a half-ready state.
+        try {
+          this.proc?.kill('SIGTERM');
+        } catch {}
 
-      // If the caller awaited start() and init failed, still allow watchdog to recover.
-      if (!this.stopping && this.watchdog) {
-        void this.restartWithBackoff();
-      }
+        // If the caller awaited start() and init failed, still allow watchdog to recover.
+        if (!this.stopping && this.watchdog) {
+          void this.restartWithBackoff();
+        }
 
-      throw e;
-    });
+        throw e;
+      });
 
     this.proc.on('exit', (code, signal) => {
-      this.log('acp:exit', { code, signal });
+      this.log('acp:exit', this.m({ code, signal }));
       const err = new Error(`opencode acp exited: code=${code} signal=${signal}`);
       for (const { reject } of this.pending.values()) reject(err);
       this.pending.clear();
@@ -109,7 +139,7 @@ export class OpenCodeAcpClient {
 
     // Spawn-level error (e.g. binary missing) won't emit 'exit' consistently.
     this.proc.on('error', (e) => {
-      this.log('acp:error', { err: (e as any)?.message ?? String(e) });
+      this.log('acp:error', this.m({ err: (e as any)?.message ?? String(e) }));
       const err = new Error(`opencode acp error: ${(e as any)?.message ?? String(e)}`);
       for (const { reject } of this.pending.values()) reject(err);
       this.pending.clear();
@@ -127,7 +157,7 @@ export class OpenCodeAcpClient {
       const s = String(buf).trim();
       if (!s) return;
       const line = s.split(/\r?\n/)[0];
-      this.log('acp:stderr', { line: line.slice(0, 500) });
+      this.log('acp:stderr', this.m({ line: line.slice(0, 500) }));
     });
 
     this.rl = readline.createInterface({ input: this.proc.stdout! });
@@ -164,6 +194,27 @@ export class OpenCodeAcpClient {
     this.proc?.kill('SIGTERM');
   }
 
+  private async reloadDesiredSessions(): Promise<void> {
+    const entries = [...this.desiredSessions.entries()];
+    if (entries.length === 0) return;
+
+    // Reload is best-effort. If it fails for some sessions, callers can still ensureSessionLoaded.
+    this.log('acp:reload_sessions_start', this.m({ count: entries.length }));
+
+    for (const [sessionId, info] of entries) {
+      try {
+        await this.send('session/load', { sessionId, cwd: info.cwd, mcpServers: [] }, undefined, this.m(info.meta));
+        this.loadedSessions.add(sessionId);
+        this.log('acp:reload_session_ok', this.m({ sessionId, ...(info.meta ?? {}) }));
+      } catch (e: any) {
+        this.log(
+          'acp:reload_session_failed',
+          this.m({ sessionId, err: e?.message ?? String(e), ...(info.meta ?? {}) }),
+        );
+      }
+    }
+  }
+
   private async restartWithBackoff(): Promise<void> {
     if (this.restarting) {
       this.restartQueued = true;
@@ -179,15 +230,15 @@ export class OpenCodeAcpClient {
       const attempt = this.restartAttempt + 1;
       this.restartAttempt = Math.min(this.restartAttempt + 1, 10);
 
-      this.log('acp:watchdog_restart_scheduled', { attempt, delayMs: delay });
+      this.log('acp:watchdog_restart_scheduled', this.m({ attempt, delayMs: delay }));
       await sleep(delay);
 
       try {
         await this.start();
-        this.log('acp:watchdog_restart_ok', { attempt });
+        this.log('acp:watchdog_restart_ok', this.m({ attempt }));
         this.restartAttempt = 0;
       } catch (e) {
-        this.log('acp:watchdog_restart_failed', { attempt, err: (e as any)?.message ?? String(e) });
+        this.log('acp:watchdog_restart_failed', this.m({ attempt, err: (e as any)?.message ?? String(e) }));
         // Queue another attempt.
         if (!this.stopping) this.restartQueued = true;
       }
@@ -206,6 +257,7 @@ export class OpenCodeAcpClient {
     opts?: { timeoutMs?: number },
     meta?: Record<string, unknown>,
   ): Promise<any> {
+    this.rememberMeta(meta);
     if (!this.proc?.stdin) throw new Error('ACP not started');
     const id = this.nextId++;
     const msg: JsonRpc = { jsonrpc: '2.0', id, method, params };
@@ -224,7 +276,7 @@ export class OpenCodeAcpClient {
           // If ACP stops responding, force a restart (watchdog will bring it back).
           if (!this.stopping && this.watchdog) {
             try {
-              this.log('acp:request_timeout_restart', { method, ...(meta ?? {}) });
+              this.log('acp:request_timeout_restart', this.m({ method, ...(meta ?? {}) }));
               this.proc?.kill('SIGTERM');
             } catch {}
           }
@@ -274,21 +326,26 @@ export class OpenCodeAcpClient {
   }
 
   async newSession(cwd: string, meta?: Record<string, unknown>): Promise<{ sessionId: string }> {
+    this.rememberMeta(meta);
     const res = await this.send('session/new', { cwd, mcpServers: [] }, undefined, meta);
     if (res?.sessionId) {
+      this.registerDesiredSession(res.sessionId, cwd, meta);
       this.loadedSessions.add(res.sessionId);
-      this.log('acp:session_new', { sessionId: res.sessionId, ...(meta ?? {}) });
+      this.log('acp:session_new', this.m({ sessionId: res.sessionId, ...(meta ?? {}) }));
     }
     return res;
   }
 
   async loadSession(sessionId: string, cwd: string, meta?: Record<string, unknown>): Promise<void> {
-    this.log('acp:session_load', { sessionId, ...(meta ?? {}) });
-    await this.send('session/load', { sessionId, cwd, mcpServers: [] }, undefined, { sessionId, ...(meta ?? {}) });
+    this.registerDesiredSession(sessionId, cwd, meta);
+    this.log('acp:session_load', this.m({ sessionId, ...(meta ?? {}) }));
+    await this.send('session/load', { sessionId, cwd, mcpServers: [] }, undefined, this.m({ sessionId, ...(meta ?? {}) }));
     this.loadedSessions.add(sessionId);
   }
 
   async ensureSessionLoaded(sessionId: string, cwd: string, meta?: Record<string, unknown>): Promise<void> {
+    this.registerDesiredSession(sessionId, cwd, meta);
+
     // If ACP isn't running, wait for watchdog restart.
     await this.start();
     if (this.loadedSessions.has(sessionId)) return;
@@ -301,6 +358,7 @@ export class OpenCodeAcpClient {
     onChunk: (t: string) => void,
     meta?: Record<string, unknown>,
   ): Promise<void> {
+    this.rememberMeta(meta);
     const off = this.onSessionUpdate(sessionId, (u) => {
       const up = u.update;
       if (up?.sessionUpdate === 'agent_message_chunk') {
@@ -316,7 +374,7 @@ export class OpenCodeAcpClient {
           prompt: [{ type: 'text', text }],
         },
         { timeoutMs: 60_000 },
-        { sessionId, ...(meta ?? {}) },
+        this.m({ sessionId, ...(meta ?? {}) }),
       );
     } finally {
       off();

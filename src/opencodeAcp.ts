@@ -261,7 +261,19 @@ export class OpenCodeAcpClient {
     if (!this.proc?.stdin) throw new Error('ACP not started');
     const id = this.nextId++;
     const msg: JsonRpc = { jsonrpc: '2.0', id, method, params };
-    this.proc.stdin.write(JSON.stringify(msg) + '\n');
+
+    try {
+      this.proc.stdin.write(JSON.stringify(msg) + '\n');
+    } catch (e: any) {
+      // If stdin is broken (EPIPE), force a restart. Callers can retry.
+      this.log('acp:stdin_write_failed', this.m({ method, id, err: e?.message ?? String(e), ...(meta ?? {}) }));
+      if (!this.stopping && this.watchdog) {
+        try {
+          this.proc?.kill('SIGTERM');
+        } catch {}
+      }
+      throw e;
+    }
 
     const timeoutMs = opts?.timeoutMs ?? 20_000;
 

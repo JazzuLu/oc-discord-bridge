@@ -44,6 +44,20 @@ Fill in:
 - `DISCORD_GUILD_ID` (recommended; commands are registered **guild-scoped**)
 - `DISCORD_ALLOW_USER_IDS` (recommended allowlist)
 
+### 2.5) Invite the bot to your server
+
+In the Discord Developer Portal, generate an OAuth2 URL with:
+- **Scopes:** `bot`, `applications.commands`
+- **Bot permissions (minimum):**
+  - View Channels
+  - Read Message History
+  - Send Messages
+  - Create Public Threads (optional; only if you want the bridge to create threads)
+  - Manage Channels (optional; only if you want the bot to set the channel topic automatically)
+
+Discord docs (OAuth2 URL generator):
+https://discord.com/developers/applications → Your app → OAuth2 → URL Generator
+
 ### 3) Run (dev)
 
 ```bash

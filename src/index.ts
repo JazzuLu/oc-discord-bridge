@@ -29,6 +29,7 @@ const FILE_THREAD_SESSION = 'threadSession.json';
 const FILE_PAUSED = 'pausedChannels.json';
 
 import { buildTopicWithCwd, isMainThreadName, parseCwdFromTopic } from './topic.js';
+import { hintMissingPermissionForSetTopic, runDiscordPreflightOnce } from './permissions.js';
 
 type LogCtx = {
   corr?: string;
@@ -397,6 +398,10 @@ async function main() {
     if (cfg.DISCORD_GUILD_ID) {
       await registerSlashCommands(cfg, client.user.id);
     }
+
+    // Preflight: try to surface missing intents / permissions early (no spam).
+    await runDiscordPreflightOnce(cfg, client);
+
     console.log(`[oc-bridge] ready as ${client.user.tag}`);
   });
 
@@ -504,15 +509,20 @@ async function main() {
           const newTopic = buildTopicWithCwd(fullParent.topic, cwd);
 
           let topicOk = true;
+          let topicHint: string | null = null;
           await fullParent.setTopic(newTopic).catch((e: any) => {
             topicOk = false;
+            topicHint = hintMissingPermissionForSetTopic(e);
             console.error('[oc-bridge] failed to set channel topic:', e?.message ?? e);
+            if (topicHint) {
+              console.error(`[oc-bridge] hint: missing permission for topic update: ${topicHint}`);
+            }
           });
 
           await cix.reply({
             content: topicOk
               ? `Set CWD for channel to: ${cwd} (topic updated)`
-              : `Set CWD for channel to: ${cwd} (WARNING: failed to update channel topic; check bot permissions)`,
+              : `Set CWD for channel to: ${cwd} (WARNING: failed to update channel topic; required permission: ${topicHint ?? 'Manage Channels'})`,
             ephemeral: true,
           });
         },

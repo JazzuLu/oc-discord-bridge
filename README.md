@@ -58,6 +58,8 @@ In the Discord Developer Portal, generate an OAuth2 URL with:
   - View Channels
   - Read Message History
   - Send Messages
+  - Send Messages in Threads (recommended)
+  - Manage Threads (recommended if you want the bridge to unarchive / keep threads usable)
   - Create Public Threads (optional; only if you want the bridge to create threads)
   - Manage Channels (optional; only if you want the bot to set the channel topic automatically)
 

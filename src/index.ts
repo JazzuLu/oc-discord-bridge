@@ -18,6 +18,7 @@ import {
   isInScopeGuild,
   registerSlashCommands,
 } from './discord.js';
+import { extractRoleIdsFromInteractionMember, isAuthorizedForOcSlash } from './auth.js';
 import type { ChatInputCommandInteraction, Message, TextChannel, ThreadChannel } from 'discord.js';
 
 const cfg = loadConfig(process.env);
@@ -420,6 +421,20 @@ async function main() {
     const corr = randomUUID().slice(0, 8);
     try {
       if (!isInScopeGuild(cfg, ix.guildId)) return;
+
+      // Guard /oc slash commands (issue #270): require explicit allowlist or role membership when configured.
+      if (ix.isChatInputCommand() && ix.commandName === 'oc') {
+        const roleIds = extractRoleIdsFromInteractionMember(ix.member);
+        if (!isAuthorizedForOcSlash(cfg, ix.user.id, roleIds)) {
+          await ix.reply({
+            content:
+              'Not authorized to use /oc in this server. Ask an admin to add your user ID to DISCORD_ALLOW_USER_IDS or your role ID to DISCORD_ALLOW_ROLE_IDS.',
+            ephemeral: true,
+          });
+          return;
+        }
+      }
+
       await handleInteraction(ix, {
         status: async (cix: ChatInputCommandInteraction) => {
           const ch = cix.channel;

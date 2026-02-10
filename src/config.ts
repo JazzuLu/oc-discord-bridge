@@ -29,6 +29,18 @@ export const ConfigSchema = z.object({
         .filter(Boolean),
     ),
 
+  // Optional: comma-separated list of role IDs allowed to use /oc slash commands.
+  // If both DISCORD_ALLOW_USER_IDS and DISCORD_ALLOW_ROLE_IDS are empty, /oc is open to all users.
+  DISCORD_ALLOW_ROLE_IDS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      (v ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+
   DISCORD_IGNORE_BOTS: envBool(true),
   DISCORD_IGNORE_CHANNELS_WITHOUT_CWD: envBool(true),
 

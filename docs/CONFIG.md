@@ -21,6 +21,19 @@ Examples:
 DISCORD_ALLOW_USER_IDS=123456789012345678,234567890123456789
 ```
 
+### `DISCORD_ALLOW_ROLE_IDS` (optional)
+Comma-separated list of Discord role IDs allowed to use the `/oc` slash command.
+
+Examples:
+
+```bash
+DISCORD_ALLOW_ROLE_IDS=345678901234567890,456789012345678901
+```
+
+Authorization behavior:
+- If **both** `DISCORD_ALLOW_USER_IDS` and `DISCORD_ALLOW_ROLE_IDS` are empty, `/oc` is allowed for anyone (backwards-compatible default; not recommended for shared servers).
+- Otherwise, `/oc` is allowed if the user ID is in `DISCORD_ALLOW_USER_IDS` **or** the user has a role in `DISCORD_ALLOW_ROLE_IDS`.
+
 If empty, the bridge will accept messages from any non-bot user the bot can see (not recommended for shared servers).
 
 ## Behavior

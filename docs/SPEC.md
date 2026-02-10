@@ -15,6 +15,7 @@
   - Stream response back by editing a single Discord message (preferred). If editing fails, fall back to chunked sends.
 
 ## Escape hatch (slash commands)
+- If `DISCORD_ALLOW_USER_IDS` or `DISCORD_ALLOW_ROLE_IDS` is set, only allow `/oc` usage by those users/roles.
 - /oc status (show: threadId, mapped sessionId, channel cwd)
 - /oc new (create new session, bind to current thread)
 - /oc switch <sessionId> (bind current thread to existing session)

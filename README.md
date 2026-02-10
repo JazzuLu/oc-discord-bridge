@@ -43,6 +43,7 @@ Fill in:
 - `DISCORD_BOT_TOKEN`
 - `DISCORD_GUILD_ID` (recommended; commands are registered **guild-scoped**)
 - `DISCORD_ALLOW_USER_IDS` (recommended allowlist)
+- `DISCORD_ALLOW_ROLE_IDS` (optional; role allowlist for `/oc`)
 
 ### 2.4) Enable gateway intents
 
@@ -86,6 +87,7 @@ All config is via environment variables:
 - `DISCORD_BOT_TOKEN` (required)
 - `DISCORD_GUILD_ID` (optional, but recommended for fast slash command iteration)
 - `DISCORD_ALLOW_USER_IDS` (optional, comma-separated allowlist)
+- `DISCORD_ALLOW_ROLE_IDS` (optional, comma-separated role allowlist for `/oc`)
 - `DISCORD_IGNORE_BOTS` (default: `true`)
 - `DISCORD_IGNORE_CHANNELS_WITHOUT_CWD` (default: `true`)
 - `OPENCODE_BIN` (default: `opencode`)

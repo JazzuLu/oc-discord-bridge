@@ -510,7 +510,21 @@ async function main() {
             try {
               const meta = { corr, threadId: thread.id, channelId: fullParent.id, messageId: m.id };
               await oc.ensureSessionLoaded(sessionId, cwd, meta);
-              await oc.prompt(sessionId, m.content, emit, meta);
+
+              // Include attachment URLs so prompts like "see screenshot" have context.
+              const attachments = Array.from(m.attachments?.values?.() ?? []);
+              const attachmentText =
+                attachments.length === 0
+                  ? ''
+                  : `\n\n[Attachments]\n${attachments
+                      .map((a) => `- ${a.name ?? 'file'}: ${a.url}`)
+                      .join('\n')}`;
+              const promptText = `${m.content ?? ''}${attachmentText}`.trim();
+
+              // If message has no text and no attachments, do nothing.
+              if (!promptText) return;
+
+              await oc.prompt(sessionId, promptText, emit, meta);
             } catch (e) {
               logError('prompt:attempt_failed', {
                 corr,

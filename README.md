@@ -79,6 +79,26 @@ pnpm start
 - `.env` is ignored by git; commit only `.env.example`.
 - Channels without `CWD=` are ignored unless you explicitly set a default `OPENCODE_DEFAULT_CWD`.
 
+## Troubleshooting
+
+### Bot can’t set / update the channel topic
+
+- The bot needs the **Manage Channels** permission in that channel.
+- If you don’t want to grant that, you can still set the mapping via `/oc cwd path:/absolute/path` (it will persist in `.data/`).
+
+### Messages aren’t being forwarded
+
+Common causes:
+- No `CWD=` mapping (and `DISCORD_IGNORE_CHANNELS_WITHOUT_CWD=true`).
+- Forwarding paused for that channel (`/oc status` will show `paused: true`).
+- `DISCORD_ALLOW_USER_IDS` is set and your user id is not in the allowlist.
+- The bot is missing permissions to **Read Messages / View Channel**, **Send Messages**, and (if you use the “main thread” convenience) **Create Public Threads**.
+
+### Slash commands don’t show up
+
+- Make sure `DISCORD_GUILD_ID` is set so commands are registered **guild-scoped**.
+- Re-run the bridge after changing env; Discord can take a short time to refresh commands.
+
 ## Contributing
 
 See `CONTRIBUTING.md`.

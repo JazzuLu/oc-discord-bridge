@@ -10,7 +10,8 @@
     "dev": "tsx watch src/index.ts",
     "start": "node --enable-source-maps dist/index.js",
     "build": "tsc -p tsconfig.json",
-    "check": "pnpm -s build"
+    "check": "pnpm -s build",
+    "test": "pnpm -s build && node --test test/*.test.js"
   },
   "dependencies": {
     "discord.js": "^14.22.1",

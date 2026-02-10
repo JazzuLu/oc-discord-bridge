@@ -79,6 +79,45 @@ pnpm build
 pnpm start
 ```
 
+### Configuration reference
+
+All config is via environment variables:
+
+- `DISCORD_BOT_TOKEN` (required)
+- `DISCORD_GUILD_ID` (optional, but recommended for fast slash command iteration)
+- `DISCORD_ALLOW_USER_IDS` (optional, comma-separated allowlist)
+- `DISCORD_IGNORE_BOTS` (default: `true`)
+- `DISCORD_IGNORE_CHANNELS_WITHOUT_CWD` (default: `true`)
+- `OPENCODE_BIN` (default: `opencode`)
+- `OPENCODE_ACP_AUTOSTART` (default: `true`)
+- `OPENCODE_DEFAULT_CWD` (optional)
+- `REDACT_SECRETS` (default: `false`)
+- `DATA_DIR` (default: `.data`)
+
+See: [`.env.example`](./.env.example)
+
+## Channel topic → CWD mapping
+
+In a Discord text channel, set the channel topic to include a line like:
+
+```
+CWD=/absolute/path/to/your/project
+```
+
+Notes:
+- The bridge looks for the **first** line starting with `CWD=`.
+- By default, channels without `CWD=` are ignored (safety).
+- You can also set CWD using `/oc cwd path:<ABSOLUTE_PATH>`:
+  - it will try to update the topic, and
+  - it will cache the value for that channel.
+
+## Thread = session
+
+- Messages are forwarded from a thread to the OpenCode session bound to that thread.
+- If you talk in the parent text channel (not in a thread), the bridge will find or create a `main` thread and use it.
+
+This keeps context from different tasks separated (Discord threads map nicely to “one chat session”).
+
 ## Slash commands
 
 `/oc status`

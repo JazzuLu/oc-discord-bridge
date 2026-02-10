@@ -2,7 +2,13 @@ import dotenv from 'dotenv';
 // Be explicit: tsx/Node cwd differences can make dotenv/config miss the file.
 dotenv.config({ path: new URL('../.env', import.meta.url) });
 import { loadConfig } from './config.js';
-import { JsonStore, type ChannelCwdMap, type PausedChannelsMap, type ThreadSessionMap } from './storage.js';
+import {
+  JsonStore,
+  type ChannelCwdMap,
+  type ChannelMainThreadMap,
+  type PausedChannelsMap,
+  type ThreadSessionMap,
+} from './storage.js';
 import { OpenCodeAcpClient } from './opencodeAcp.js';
 import {
   createDiscordClient,
@@ -12,14 +18,22 @@ import {
   registerSlashCommands,
 } from './discord.js';
 import type { ChatInputCommandInteraction, Message, TextChannel, ThreadChannel } from 'discord.js';
-import path from 'node:path';
 
 const cfg = loadConfig(process.env);
 const store = new JsonStore(cfg.DATA_DIR);
 
 const FILE_CHANNEL_CWD = 'channelCwd.json';
+const FILE_CHANNEL_MAIN_THREAD = 'channelMainThread.json';
 const FILE_THREAD_SESSION = 'threadSession.json';
 const FILE_PAUSED = 'pausedChannels.json';
+
+const TOPIC_MAX = 1024;
+
+/**
+ * Per-channel lock for findOrCreateMainThread to prevent duplicate thread creation
+ * when multiple messages arrive concurrently for the same parent channel.
+ */
+const mainThreadLocks = new Map<string, Promise<ThreadChannel | null>>();
 
 function parseCwdFromTopic(topic: string | null | undefined): string | null {
   if (!topic) return null;
@@ -32,6 +46,37 @@ function parseCwdFromTopic(topic: string | null | undefined): string | null {
   return cwd || null;
 }
 
+/** Build a new topic string with the CWD= line replaced or appended. */
+function buildTopicWithCwd(existing: string | null | undefined, cwd: string): string {
+  const cwdLine = `CWD=${cwd}`;
+
+  // Split into lines; remove ALL existing CWD= lines to avoid accumulating duplicates.
+  const rawLines = (existing ?? '').split(/\r?\n/);
+  const nonCwdLines = rawLines.filter((l) => !l.trimStart().startsWith('CWD='));
+
+  // Keep the topic stable-ish by appending our CWD line to the end.
+  const lines = [...nonCwdLines, cwdLine];
+
+  let topic = lines.join('\n');
+
+  // Respect Discord 1024 char limit: trim older non-CWD lines from the top.
+  while (topic.length > TOPIC_MAX) {
+    const parts = topic.split('\n');
+    const removed = parts.findIndex((l) => !l.trimStart().startsWith('CWD='));
+    if (removed < 0) break; // only CWD lines remain; nothing else to trim
+    parts.splice(removed, 1);
+    topic = parts.join('\n');
+  }
+
+  return topic.slice(0, TOPIC_MAX);
+}
+
+/** Tolerant check: treat "main", "main ...", "main-…", "main:…" as the canonical main thread. */
+function isMainThreadName(name: string | null | undefined): boolean {
+  const n = (name ?? '').trim().toLowerCase();
+  return n === 'main' || n.startsWith('main ') || n.startsWith('main-') || n.startsWith('main:');
+}
+
 function allowUser(userId: string): boolean {
   const allow = cfg.DISCORD_ALLOW_USER_IDS;
   if (!allow || allow.length === 0) return true;
@@ -42,6 +87,17 @@ async function upsertChannelCwd(channelId: string, cwd: string): Promise<void> {
   const map = await store.readJson<ChannelCwdMap>(FILE_CHANNEL_CWD, {});
   map[channelId] = { cwd, updatedAt: Date.now() };
   await store.writeJson(FILE_CHANNEL_CWD, map);
+}
+
+async function upsertChannelMainThread(channelId: string, threadId: string): Promise<void> {
+  const map = await store.readJson<ChannelMainThreadMap>(FILE_CHANNEL_MAIN_THREAD, {});
+  map[channelId] = { threadId, updatedAt: Date.now() };
+  await store.writeJson(FILE_CHANNEL_MAIN_THREAD, map);
+}
+
+async function getChannelMainThreadId(channelId: string): Promise<string | null> {
+  const map = await store.readJson<ChannelMainThreadMap>(FILE_CHANNEL_MAIN_THREAD, {});
+  return map[channelId]?.threadId ?? null;
 }
 
 async function getChannelCwd(channelId: string, topic: string | null | undefined): Promise<string | null> {
@@ -99,6 +155,118 @@ async function ensureThreadSession(oc: OpenCodeAcpClient, thread: ThreadChannel,
   const binding = { sessionId: res.sessionId, cwd, createdAt: now, updatedAt: now };
   await setThreadBinding(thread.id, binding);
   return { ok: true as const, binding };
+}
+
+/**
+ * Locked wrapper: ensures only one findOrCreate runs per parent channel at a time,
+ * preventing duplicate 'main' thread creation from concurrent messages.
+ */
+async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<ThreadChannel | null> {
+  const existing = mainThreadLocks.get(parent.id);
+  if (existing) {
+    // Another call is already in-flight for this channel; wait for it.
+    return existing;
+  }
+
+  const promise = findOrCreateMainThreadInner(parent, m);
+  mainThreadLocks.set(parent.id, promise);
+  try {
+    return await promise;
+  } finally {
+    mainThreadLocks.delete(parent.id);
+  }
+}
+
+async function findOrCreateMainThreadInner(parent: TextChannel, m: Message): Promise<ThreadChannel | null> {
+  const storedId = await getChannelMainThreadId(parent.id);
+
+  const findInCollections = (coll: any, predicate: (t: ThreadChannel) => boolean): ThreadChannel | null => {
+    if (!coll) return null;
+    const threads: any = coll.threads ?? coll;
+    if (!threads) return null;
+    // discord.js collections typically have .find
+    return (threads.find?.(predicate) as ThreadChannel) ?? null;
+  };
+
+  const ensureUnarchived = async (t: ThreadChannel): Promise<void> => {
+    if ((t as any).archived) await (t as any).setArchived(false).catch(() => null);
+  };
+
+  const tryResolve = async (threadId: string): Promise<ThreadChannel | null> => {
+    // discord.js does not support fetching a thread by id via parent.threads.fetch(threadId).
+    // Use the global client channel fetch instead.
+    try {
+      const fetched = await m.client.channels.fetch(threadId).catch(() => null);
+      if (fetched && (fetched as any).isThread?.()) {
+        const t = fetched as ThreadChannel;
+        // Ensure it belongs to this parent channel
+        if ((t as any).parentId === parent.id) {
+          await ensureUnarchived(t);
+          return t;
+        }
+      }
+    } catch {}
+
+    const active = await parent.threads.fetchActive().catch(() => null);
+    const inActive = findInCollections(active, (t) => t.id === threadId);
+    if (inActive) return inActive;
+
+    // Archived thread listing is paginated; scan a bit deeper to avoid duplicates.
+    let before: string | undefined = undefined;
+    for (let i = 0; i < 5; i++) {
+      const page = await parent.threads.fetchArchived({ limit: 100, before } as any).catch(() => null);
+      const inPage = findInCollections(page, (t) => t.id === threadId);
+      if (inPage) {
+        await ensureUnarchived(inPage);
+        return inPage;
+      }
+      const pageThreads: any = (page as any)?.threads ?? page;
+      const last = pageThreads?.last?.() as ThreadChannel | undefined;
+      if (!last) break;
+      before = last.id;
+    }
+
+    return null;
+  };
+
+  const findByName = async (): Promise<ThreadChannel | null> => {
+    const active = await parent.threads.fetchActive().catch(() => null);
+    const byNameActive = findInCollections(active, (t) => isMainThreadName(t.name));
+    if (byNameActive) return byNameActive;
+
+    let before: string | undefined = undefined;
+    for (let i = 0; i < 5; i++) {
+      const page = await parent.threads.fetchArchived({ limit: 100, before } as any).catch(() => null);
+      const byName = findInCollections(page, (t) => isMainThreadName(t.name));
+      if (byName) return byName;
+      const pageThreads: any = (page as any)?.threads ?? page;
+      const last = pageThreads?.last?.() as ThreadChannel | undefined;
+      if (!last) break;
+      before = last.id;
+    }
+
+    return null;
+  };
+
+  // 1) Stored mapping
+  if (storedId) {
+    const resolved = await tryResolve(storedId);
+    if (resolved) return resolved;
+  }
+
+  // 2) Search by (tolerant) name
+  const existing = await findByName();
+  if (existing) {
+    await ensureUnarchived(existing);
+    await upsertChannelMainThread(parent.id, existing.id);
+    return existing;
+  }
+
+  // 3) Create
+  const created = await m.startThread({ name: 'main', autoArchiveDuration: 1440 }).catch(() => null);
+  if (!created) return null;
+  await upsertChannelMainThread(parent.id, created.id);
+  return created;
 }
 
 async function streamToDiscord(
@@ -220,8 +388,24 @@ async function main() {
           const { parent } = getThreadAndParentChannel(ch);
           if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
           const cwd = cix.options.getString('path', true);
+
           await upsertChannelCwd(parent.id, cwd);
-          await cix.reply({ content: `Set CWD for channel to: ${cwd}`, ephemeral: true });
+
+          const fullParent = await parent.fetch().catch(() => parent);
+          const newTopic = buildTopicWithCwd(fullParent.topic, cwd);
+
+          let topicOk = true;
+          await fullParent.setTopic(newTopic).catch((e: any) => {
+            topicOk = false;
+            console.error('[oc-bridge] failed to set channel topic:', e?.message ?? e);
+          });
+
+          await cix.reply({
+            content: topicOk
+              ? `Set CWD for channel to: ${cwd} (topic updated)`
+              : `Set CWD for channel to: ${cwd} (WARNING: failed to update channel topic; check bot permissions)`,
+            ephemeral: true,
+          });
         },
       });
     } catch (e: any) {
@@ -243,14 +427,18 @@ async function main() {
       const ch = await m.channel.fetch().catch(() => m.channel);
       let { thread, parent } = getThreadAndParentChannel(ch);
 
-      // Convenience: if user talks in a configured text channel, auto-create a thread
+      // If user is already in the canonical 'main' thread, remember it to avoid duplicates.
+      if (thread && parent && isMainThreadName(thread.name)) {
+        await upsertChannelMainThread(parent.id, thread.id);
+      }
+
+      // Convenience: if user talks in a configured text channel, reuse (or create) a main thread
       if (!thread && parent) {
         const cwd = await getChannelCwd(parent.id, (parent as any).topic);
         if (cfg.DISCORD_IGNORE_CHANNELS_WITHOUT_CWD && !cwd) return;
-        // Start a thread from this message so thread=session holds.
-        const created = await m.startThread({ name: 'main', autoArchiveDuration: 1440 }).catch(() => null);
-        if (!created) return;
-        thread = created;
+        const mainThread = await findOrCreateMainThread(parent, m);
+        if (!mainThread) return;
+        thread = mainThread;
       }
 
       if (!thread || !parent) return;

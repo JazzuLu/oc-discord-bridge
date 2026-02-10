@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 export type ChannelCwdMap = Record<string, { cwd: string; updatedAt: number }>;
+export type ChannelMainThreadMap = Record<string, { threadId: string; updatedAt: number }>;
 export type ThreadSessionMap =
   | Record<
       string,

@@ -248,14 +248,14 @@ async function ensureThreadSession(oc: OpenCodeAcpClient, thread: ThreadChannel,
  * Locked wrapper: ensures only one findOrCreate runs per parent channel at a time,
  * preventing duplicate 'main' thread creation from concurrent messages.
  */
-async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<ThreadChannel | null> {
+async function findOrCreateMainThread(parent: TextChannel, m: Message, corr: string): Promise<ThreadChannel | null> {
   const existing = mainThreadLocks.get(parent.id);
   if (existing) {
     // Another call is already in-flight for this channel; wait for it.
     return existing;
   }
 
-  const promise = findOrCreateMainThreadInner(parent, m);
+  const promise = findOrCreateMainThreadInner(parent, m, corr);
   mainThreadLocks.set(parent.id, promise);
   try {
     return await promise;
@@ -264,7 +264,7 @@ async function findOrCreateMainThread(parent: TextChannel, m: Message): Promise<
   }
 }
 
-async function findOrCreateMainThreadInner(parent: TextChannel, m: Message): Promise<ThreadChannel | null> {
+async function findOrCreateMainThreadInner(parent: TextChannel, m: Message, corr: string): Promise<ThreadChannel | null> {
   const storedId = await getChannelMainThreadId(parent.id);
 
   const findInCollections = (coll: any, predicate: (t: ThreadChannel) => boolean): ThreadChannel | null => {
@@ -350,7 +350,31 @@ async function findOrCreateMainThreadInner(parent: TextChannel, m: Message): Pro
   }
 
   // 3) Create
-  const created = await m.startThread({ name: 'main', autoArchiveDuration: 1440 }).catch(() => null);
+  let created: ThreadChannel | null = null;
+  try {
+    created = await m.startThread({ name: 'main', autoArchiveDuration: 1440 });
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    const code = e?.code;
+    const missingPerm = code === 50013 || /Missing Permissions/i.test(msg) || /Missing Access/i.test(msg);
+
+    logError('main_thread:create_failed', { corr, channelId: parent.id, messageId: m.id, e });
+
+    if (missingPerm) {
+      // Avoid hammering the API / spamming logs: pause this parent channel until a human fixes perms.
+      await setChannelPaused(parent.id, true);
+      try {
+        await m.reply(
+          'I cannot create the "main" thread in this channel (missing thread permissions). ' +
+            'I\'ve paused forwarding here to avoid repeated failures. ' +
+            'Fix Discord permissions (Create Public Threads / Send Messages in Threads), then run /oc resume.',
+        );
+      } catch {}
+    }
+
+    return null;
+  }
+
   if (!created) return null;
   await upsertChannelMainThread(parent.id, created.id);
   return created;
@@ -577,7 +601,7 @@ async function main() {
       if (!thread && parent) {
         const cwd = await getChannelCwd(parent.id, (parent as any).topic);
         if (cfg.DISCORD_IGNORE_CHANNELS_WITHOUT_CWD && !cwd) return;
-        const mainThread = await findOrCreateMainThread(parent, m);
+        const mainThread = await findOrCreateMainThread(parent, m, corr);
         if (!mainThread) return;
         thread = mainThread;
       }

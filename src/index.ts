@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { randomUUID } from 'node:crypto';
 // Be explicit: tsx/Node cwd differences can make dotenv/config miss the file.
 dotenv.config({ path: new URL('../.env', import.meta.url) });
 import { loadConfig } from './config.js';
@@ -29,11 +30,92 @@ const FILE_PAUSED = 'pausedChannels.json';
 
 const TOPIC_MAX = 1024;
 
+type LogCtx = {
+  corr?: string;
+  threadId?: string;
+  sessionId?: string;
+  channelId?: string;
+  messageId?: string;
+  attempt?: number;
+  delayMs?: number;
+};
+
+function logInfo(msg: string, ctx: LogCtx = {}): void {
+  const parts = [
+    '[oc-bridge]',
+    msg,
+    ctx.corr ? `corr=${ctx.corr}` : null,
+    ctx.channelId ? `channel=${ctx.channelId}` : null,
+    ctx.threadId ? `thread=${ctx.threadId}` : null,
+    ctx.sessionId ? `session=${ctx.sessionId}` : null,
+    ctx.messageId ? `msg=${ctx.messageId}` : null,
+    typeof ctx.attempt === 'number' ? `attempt=${ctx.attempt}` : null,
+    typeof ctx.delayMs === 'number' ? `delayMs=${ctx.delayMs}` : null,
+  ].filter(Boolean);
+  console.log(parts.join(' '));
+}
+
+function safeErrMeta(e: unknown): { err: string; stack?: string } {
+  if (e && typeof e === 'object') {
+    const anyE = e as any;
+    const msg = anyE?.message ? String(anyE.message) : String(e);
+    const stack = typeof anyE?.stack === 'string' ? anyE.stack : undefined;
+    return { err: msg.slice(0, 500), stack: stack ? stack.slice(0, 1500) : undefined };
+  }
+  return { err: String(e).slice(0, 500) };
+}
+
+function logError(msg: string, ctx: LogCtx & { e?: unknown } = {}): void {
+  const { e, ...rest } = ctx;
+  const meta = e ? safeErrMeta(e) : undefined;
+  const parts = [
+    '[oc-bridge]',
+    msg,
+    rest.corr ? `corr=${rest.corr}` : null,
+    rest.channelId ? `channel=${rest.channelId}` : null,
+    rest.threadId ? `thread=${rest.threadId}` : null,
+    rest.sessionId ? `session=${rest.sessionId}` : null,
+    rest.messageId ? `msg=${rest.messageId}` : null,
+    typeof (rest as any).attempt === 'number' ? `attempt=${(rest as any).attempt}` : null,
+    typeof (rest as any).delayMs === 'number' ? `delayMs=${(rest as any).delayMs}` : null,
+    meta?.err ? `err=${meta.err}` : null,
+  ].filter(Boolean);
+  console.error(parts.join(' '));
+  if (meta?.stack) console.error(meta.stack);
+}
+
+async function retryWithBackoff<T>(
+  fn: (attempt: number) => Promise<T>,
+  opts: {
+    attempts: number;
+    baseDelayMs: number;
+    onRetry?: (info: { attempt: number; delayMs: number; err: unknown }) => void;
+  },
+): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= opts.attempts; attempt++) {
+    try {
+      return await fn(attempt);
+    } catch (e) {
+      lastErr = e;
+      if (attempt >= opts.attempts) break;
+      const base = opts.baseDelayMs * 2 ** (attempt - 1);
+      const jitter = Math.floor(Math.random() * 150);
+      const delay = Math.min(5_000, base + jitter);
+      opts.onRetry?.({ attempt, delayMs: delay, err: e });
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 /**
  * Per-channel lock for findOrCreateMainThread to prevent duplicate thread creation
  * when multiple messages arrive concurrently for the same parent channel.
  */
 const mainThreadLocks = new Map<string, Promise<ThreadChannel | null>>();
+
 
 function parseCwdFromTopic(topic: string | null | undefined): string | null {
   if (!topic) return null;
@@ -142,15 +224,20 @@ async function ensureThreadSession(oc: OpenCodeAcpClient, thread: ThreadChannel,
   }
 
   if (existing && existing.cwd && existing.sessionId) {
-    // optimistic: assume still valid; load lazily only if needed later
+    // Remember this binding so watchdog restarts can re-load it proactively.
+    oc.trackSession(existing.sessionId, existing.cwd, { threadId: thread.id, channelId: parent.id });
+    // optimistic: assume still valid; we'll session/load right before prompting.
     return { ok: true as const, binding: existing };
   }
+
+  // Ensure ACP is running before creating a new session.
+  await oc.start({ watchdog: true });
 
   if (!cwd) {
     return { ok: false as const, reason: 'no_cwd' as const };
   }
 
-  const res = await oc.newSession(cwd);
+  const res = await oc.newSession(cwd, { threadId: thread.id });
   const now = Date.now();
   const binding = { sessionId: res.sessionId, cwd, createdAt: now, updatedAt: now };
   await setThreadBinding(thread.id, binding);
@@ -309,11 +396,30 @@ async function streamToDiscord(
 
 async function main() {
   const client = createDiscordClient(cfg);
-  const oc = new OpenCodeAcpClient(cfg.OPENCODE_BIN, process.cwd());
+  const oc = new OpenCodeAcpClient(cfg.OPENCODE_BIN, process.cwd(), (msg, meta) => {
+    const m = meta ?? {};
+    // Keep it line-based and secret-free; truncate noisy fields.
+    const parts = [
+      '[oc-bridge]',
+      msg,
+      typeof (m as any).corr === 'string' ? `corr=${String((m as any).corr).slice(0, 32)}` : null,
+      typeof (m as any).channelId === 'string' ? `channel=${(m as any).channelId}` : null,
+      typeof (m as any).threadId === 'string' ? `thread=${(m as any).threadId}` : null,
+      typeof (m as any).messageId === 'string' ? `msg=${(m as any).messageId}` : null,
+      typeof (m as any).pid === 'number' ? `pid=${(m as any).pid}` : null,
+      typeof (m as any).sessionId === 'string' ? `session=${(m as any).sessionId}` : null,
+      typeof (m as any).attempt === 'number' ? `attempt=${(m as any).attempt}` : null,
+      typeof (m as any).delayMs === 'number' ? `delayMs=${(m as any).delayMs}` : null,
+      typeof (m as any).code === 'number' ? `code=${(m as any).code}` : null,
+      typeof (m as any).signal === 'string' ? `signal=${(m as any).signal}` : null,
+      typeof (m as any).err === 'string' ? `err=${String((m as any).err).slice(0, 300)}` : null,
+      typeof (m as any).line === 'string' ? `line=${String((m as any).line).slice(0, 200)}` : null,
+    ].filter(Boolean);
+    console.log(parts.join(' '));
+  });
 
   if (cfg.OPENCODE_ACP_AUTOSTART) {
-    oc.start();
-    await oc.initialize();
+    await oc.start({ watchdog: true });
   }
 
   client.on('ready', async () => {
@@ -325,6 +431,7 @@ async function main() {
   });
 
   client.on('interactionCreate', async (ix) => {
+    const corr = randomUUID().slice(0, 8);
     try {
       if (!isInScopeGuild(cfg, ix.guildId)) return;
       await handleInteraction(ix, {
@@ -352,7 +459,23 @@ async function main() {
           if (!thread || !parent) return void cix.reply({ content: 'Run this inside a thread', ephemeral: true });
           const cwd = await getChannelCwd(parent.id, parent.topic);
           if (!cwd) return void cix.reply({ content: 'No CWD configured for this channel', ephemeral: true });
-          const res = await oc.newSession(cwd);
+
+          const meta = { corr, channelId: parent.id, threadId: thread.id };
+
+          const res = await retryWithBackoff(
+            async (attempt) => {
+              await oc.start({ watchdog: true });
+              return oc.newSession(cwd, { ...meta, attempt });
+            },
+            {
+              attempts: 3,
+              baseDelayMs: 300,
+              onRetry: ({ attempt, delayMs, err }) => {
+                logError('interaction:new_session_retry_scheduled', { ...meta, attempt, delayMs, e: err });
+              },
+            },
+          );
+
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId: res.sessionId, cwd, createdAt: now, updatedAt: now });
           await cix.reply({ content: `Bound thread to NEW session: ${res.sessionId}`, ephemeral: true });
@@ -364,7 +487,23 @@ async function main() {
           const sessionId = cix.options.getString('session_id', true);
           const cwd = await getChannelCwd(parent.id, parent.topic);
           if (!cwd) return void cix.reply({ content: 'No CWD configured for this channel', ephemeral: true });
-          await oc.loadSession(sessionId, cwd);
+
+          const meta = { corr, channelId: parent.id, threadId: thread.id, sessionId };
+
+          await retryWithBackoff(
+            async (attempt) => {
+              await oc.start({ watchdog: true });
+              await oc.loadSession(sessionId, cwd, { ...meta, attempt });
+            },
+            {
+              attempts: 3,
+              baseDelayMs: 300,
+              onRetry: ({ attempt, delayMs, err }) => {
+                logError('interaction:switch_session_retry_scheduled', { ...meta, attempt, delayMs, e: err });
+              },
+            },
+          );
+
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId, cwd, createdAt: now, updatedAt: now });
           await cix.reply({ content: `Bound thread to session: ${sessionId}`, ephemeral: true });
@@ -409,7 +548,7 @@ async function main() {
         },
       });
     } catch (e: any) {
-      console.error(e);
+      logError('interaction:error', { e });
       try {
         // @ts-ignore
         if (ix.isRepliable()) await ix.reply({ content: `Error: ${e?.message ?? String(e)}`, ephemeral: true });
@@ -422,6 +561,8 @@ async function main() {
       if (!isInScopeGuild(cfg, m.guildId)) return;
       if (cfg.DISCORD_IGNORE_BOTS && m.author.bot) return;
       if (!allowUser(m.author.id)) return;
+
+      const corr = randomUUID().slice(0, 8);
 
       // Ensure we have full channel objects (topics on parents are often missing on partials)
       const ch = await m.channel.fetch().catch(() => m.channel);
@@ -451,14 +592,53 @@ async function main() {
       const ensured = await ensureThreadSession(oc, thread, fullParent);
       if (!ensured.ok) return;
 
+      const { sessionId, cwd } = ensured.binding;
+      logInfo('prompt:start', {
+        corr,
+        channelId: fullParent.id,
+        threadId: thread.id,
+        sessionId,
+        messageId: m.id,
+      });
+
       await streamToDiscord(m, async (emit) => {
-        await oc.prompt(ensured.binding.sessionId, m.content, emit);
+        const meta = {
+          corr,
+          threadId: thread.id,
+          channelId: fullParent.id,
+          messageId: m.id,
+          sessionId,
+        };
+
+        await retryWithBackoff(
+          async (attempt) => {
+            if (attempt > 1) {
+              logInfo('prompt:retry', { ...meta, attempt });
+            }
+            try {
+              // If ACP restarted, ensure the session binding is re-loaded before prompting.
+              await oc.ensureSessionLoaded(sessionId, cwd, { ...meta, attempt });
+              await oc.prompt(sessionId, m.content, emit, { ...meta, attempt });
+            } catch (e) {
+              logError('prompt:attempt_failed', { ...meta, e });
+              throw e;
+            }
+          },
+          {
+            attempts: 3,
+            baseDelayMs: 300,
+            onRetry: ({ attempt, delayMs, err }) => {
+              // Log retry scheduling with correlation ids (no secrets).
+              logError('prompt:retry_scheduled', { ...meta, attempt, delayMs, e: err });
+            },
+          },
+        );
       });
 
       const now = Date.now();
       await setThreadBinding(thread.id, { ...ensured.binding, updatedAt: now });
     } catch (e) {
-      console.error(e);
+      logError('message:error', { e });
     }
   });
 
@@ -466,6 +646,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error(e);
+  logError('fatal', { e });
   process.exit(1);
 });

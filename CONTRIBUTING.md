@@ -1,46 +1,30 @@
 # Contributing
 
-Thanks for taking the time to contribute.
-
-## Quick start
-
-- Requires Node.js 20+
-- Uses `pnpm`
-
-```bash
-pnpm install
-pnpm build
-```
+Thanks for contributing!
 
 ## Development
 
-```bash
-pnpm dev
-```
+Prereqs:
+- Node.js (recommended: latest LTS)
+- pnpm
 
-## Testing
+Setup:
+1. `pnpm install`
+2. Copy `.env.example` to `.env` and fill values.
+3. Run dev mode: `pnpm dev`
 
-There are currently no automated tests. CI runs typecheck/build.
+Build:
+- `pnpm build`
 
-## Code style
+## Project conventions
 
-- Keep changes small and easy to review.
-- Prefer explicit, boring code over cleverness.
-- Avoid adding new runtime dependencies unless there’s a clear reason.
+- **No secrets in git**. Use `.env` locally; commit only `.env.example`.
+- Keep Discord behavior safe-by-default: channels without `CWD=` should be ignored unless explicitly configured.
+- Prefer small, reviewable PRs with a clear description.
 
-## Security
+## Reporting issues
 
-- **Never commit secrets** (Discord bot tokens, private keys, etc.).
-- Use `.env` locally; keep `.env.example` up to date.
-- If you suspect a token was committed, rotate it immediately.
-
-## Submitting changes
-
-1. Create a branch.
-2. Make your change.
-3. Ensure `pnpm build` passes.
-4. Open a PR describing the motivation and approach.
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the MIT License.
+Please include:
+- Node version + pnpm version
+- Logs (redact tokens)
+- Steps to reproduce

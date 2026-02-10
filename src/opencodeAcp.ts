@@ -62,8 +62,17 @@ export class OpenCodeAcpClient {
 
   private rememberMeta(meta?: Record<string, unknown>): void {
     if (!meta) return;
-    // keep it shallow and small
-    this.lastMeta = { ...(this.lastMeta ?? {}), ...meta };
+
+    // Keep it shallow, small, and stable. Avoid persisting per-message correlation ids
+    // (corr/messageId) across unrelated logs; those should remain request-scoped.
+    const allow: (keyof Record<string, unknown>)[] = ['channelId', 'threadId', 'sessionId'];
+    const picked: Record<string, unknown> = {};
+    for (const k of allow) {
+      if (meta[k] !== undefined) picked[k] = meta[k];
+    }
+    if (Object.keys(picked).length === 0) return;
+
+    this.lastMeta = { ...(this.lastMeta ?? {}), ...picked };
   }
 
   private m(meta?: Record<string, unknown>): Record<string, unknown> {
@@ -193,6 +202,9 @@ export class OpenCodeAcpClient {
 
     // Wait for initialize to finish before returning.
     await this.ready;
+
+    // If start() succeeded, we're healthy again.
+    this.restartAttempt = 0;
   }
 
   stop(): void {

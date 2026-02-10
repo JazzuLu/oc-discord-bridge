@@ -26,6 +26,7 @@ Core ideas:
 1. Create a Discord application + bot in the Developer Portal.
 2. Enable the bot intents you need (at least **Message Content Intent** if you want to forward raw message content).
 3. Invite the bot to your server (scopes: `bot`, `applications.commands`).
+   - Recommended bot permissions: **Read Messages/View Channels**, **Send Messages**, **Create Public Threads**, **Send Messages in Threads**, **Manage Threads** (for auto-creating / managing the `main` thread).
 4. Copy the bot token for `DISCORD_BOT_TOKEN`.
 
 ### Install

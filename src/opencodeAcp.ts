@@ -65,7 +65,7 @@ export class OpenCodeAcpClient {
 
     // Keep it shallow, small, and stable. Avoid persisting per-message correlation ids
     // (corr/messageId) across unrelated logs; those should remain request-scoped.
-    const allow: (keyof Record<string, unknown>)[] = ['corr', 'channelId', 'threadId', 'sessionId'];
+    const allow: (keyof Record<string, unknown>)[] = ['channelId', 'threadId', 'sessionId'];
     const picked: Record<string, unknown> = {};
     for (const k of allow) {
       if (meta[k] !== undefined) picked[k] = meta[k];

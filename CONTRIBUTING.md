@@ -1,30 +1,50 @@
 # Contributing
 
-Thanks for contributing!
+Thanks for considering a contribution!
 
-## Development
+## Development setup
 
-Prereqs:
-- Node.js (recommended: latest LTS)
-- pnpm
+- Node.js: recommended **Node 20+**
+- Package manager: **pnpm**
 
-Setup:
-1. `pnpm install`
-2. Copy `.env.example` to `.env` and fill values.
-3. Run dev mode: `pnpm dev`
+```bash
+pnpm install
+```
+
+Copy env template:
+
+```bash
+cp .env.example .env
+```
+
+Run in dev/watch mode:
+
+```bash
+pnpm dev
+```
 
 Build:
-- `pnpm build`
 
-## Project conventions
+```bash
+pnpm build
+```
 
-- **No secrets in git**. Use `.env` locally; commit only `.env.example`.
-- Keep Discord behavior safe-by-default: channels without `CWD=` should be ignored unless explicitly configured.
-- Prefer small, reviewable PRs with a clear description.
+## Repository hygiene
+
+- **Do not commit secrets.** Never commit `.env` or tokens.
+- If you suspect a secret was committed, assume it is compromised and rotate it.
+- Prefer small, focused PRs.
+
+## Pull requests
+
+- Keep changes scoped (one concern per PR where possible).
+- Update README/docs when behavior changes.
+- Ensure `pnpm build` passes.
 
 ## Reporting issues
 
-Please include:
-- Node version + pnpm version
-- Logs (redact tokens)
-- Steps to reproduce
+When filing a bug, please include:
+- what you expected vs. what happened
+- steps to reproduce
+- your Node/pnpm versions
+- relevant logs (redact tokens)

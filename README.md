@@ -20,6 +20,11 @@ A small Discord ↔ OpenCode (`opencode`) bridge that runs locally.
 - **Slash commands = escape hatch / control plane**
   - The bridge registers a single `/oc` command with subcommands to inspect and control mappings.
 
+## Requirements
+
+- Node.js 22+
+- pnpm (CI uses pnpm 9)
+
 ## Setup
 
 ### 1) Install

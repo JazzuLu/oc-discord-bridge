@@ -618,7 +618,21 @@ async function main() {
             try {
               // If ACP restarted, ensure the session binding is re-loaded before prompting.
               await oc.ensureSessionLoaded(sessionId, cwd, { ...meta, attempt });
-              await oc.prompt(sessionId, m.content, emit, { ...meta, attempt });
+
+              // Include attachment URLs so prompts like "see screenshot" have context.
+              const attachments = Array.from(m.attachments?.values?.() ?? []);
+              const attachmentText =
+                attachments.length === 0
+                  ? ''
+                  : `\n\n[Attachments]\n${attachments
+                      .map((a) => `- ${a.name ?? 'file'}: ${a.url}`)
+                      .join('\n')}`;
+              const promptText = `${m.content ?? ''}${attachmentText}`.trim();
+
+              // If message has no text and no attachments, do nothing.
+              if (!promptText) return;
+
+              await oc.prompt(sessionId, promptText, emit, { ...meta, attempt });
             } catch (e) {
               logError('prompt:attempt_failed', { ...meta, e });
               throw e;

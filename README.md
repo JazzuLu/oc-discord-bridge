@@ -132,6 +132,7 @@ Common causes:
 ## Docs
 
 - Spec: `docs/SPEC.md`
+- Config reference: `docs/CONFIG.md`
 
 ## Contributing
 

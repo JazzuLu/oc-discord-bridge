@@ -131,6 +131,8 @@ Common causes:
 
 ## Docs
 
+- Install & run: `docs/INSTALL.md`
+- Troubleshooting: `docs/TROUBLESHOOTING.md`
 - Spec: `docs/SPEC.md`
 - Config reference: `docs/CONFIG.md`
 

@@ -78,6 +78,19 @@ function logError(msg: string, ctx: LogCtx & { e?: unknown } = {}): void {
   if (meta?.stack) console.error(meta.stack);
 }
 
+function formatBytes(n?: number): string {
+  if (!Number.isFinite(n) || (n ?? 0) <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let v = n as number;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  const digits = i === 0 ? 0 : i === 1 ? 0 : 1;
+  return `${v.toFixed(digits)} ${units[i]}`;
+}
+
 async function retryWithBackoff<T>(
   fn: (attempt: number) => Promise<T>,
   opts: { attempts: number; baseDelayMs: number },
@@ -517,7 +530,13 @@ async function main() {
                 attachments.length === 0
                   ? ''
                   : `\n\n[Attachments]\n${attachments
-                      .map((a) => `- ${a.name ?? 'file'}: ${a.url}`)
+                      .map((a) => {
+                        const name = a.name ?? 'file';
+                        const type = (a as any)?.contentType ? String((a as any).contentType) : '';
+                        const size = formatBytes((a as any)?.size);
+                        const meta = [type, size].filter(Boolean).join(', ');
+                        return `- ${name}${meta ? ` (${meta})` : ''}: ${a.url}`;
+                      })
                       .join('\n')}`;
               const promptText = `${m.content ?? ''}${attachmentText}`.trim();
 

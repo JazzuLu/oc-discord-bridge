@@ -224,7 +224,7 @@ async function ensureThreadSession(oc: OpenCodeAcpClient, thread: ThreadChannel,
     return { ok: false as const, reason: 'no_cwd' as const };
   }
 
-  const res = await oc.newSession(cwd, { threadId: thread.id });
+  const res = await oc.newSession(cwd, { threadId: thread.id, channelId: parent.id });
   const now = Date.now();
   const binding = { sessionId: res.sessionId, cwd, createdAt: now, updatedAt: now };
   await setThreadBinding(thread.id, binding);

@@ -2,6 +2,7 @@ node_modules/
 dist/
 .data/
 .env
+.serena/
 .DS_Store
 *.log
 .serena/

@@ -74,6 +74,10 @@ pnpm start
 - `.env` is ignored by git; commit only `.env.example`.
 - Channels without `CWD=` are ignored unless you explicitly set a default `OPENCODE_DEFAULT_CWD`.
 
+## Contributing
+
+See `CONTRIBUTING.md`.
+
 ## License
 
 MIT (see `LICENSE`).

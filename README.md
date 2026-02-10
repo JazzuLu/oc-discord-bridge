@@ -98,6 +98,11 @@ pnpm start
 
 - `.env` is ignored by git; commit only `.env.example`.
 - Channels without `CWD=` are ignored unless you explicitly set a default `OPENCODE_DEFAULT_CWD`.
+- **Attachments are not downloaded.** If a Discord message has attachments, the bridge forwards only **URLs + basic metadata** (filename/contentType/size) into the OpenCode prompt context.
+- Per-guild/channel/thread state is persisted under `.data/` (so you can inspect/backup it easily):
+  - `.data/channelCwd.json`
+  - `.data/threadSession.json`
+  - `.data/pausedChannels.json`
 
 ## Troubleshooting
 
@@ -118,6 +123,10 @@ Common causes:
 
 - Make sure `DISCORD_GUILD_ID` is set so commands are registered **guild-scoped**.
 - Re-run the bridge after changing env; Discord can take a short time to refresh commands.
+
+## Docs
+
+- Spec: `docs/SPEC.md`
 
 ## Contributing
 

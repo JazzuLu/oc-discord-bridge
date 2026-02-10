@@ -1,46 +1,50 @@
 # Contributing
 
-Thanks for taking the time to contribute.
+Thanks for considering a contribution!
 
-## Quick start
+## Development setup
 
-- Requires Node.js 20+
-- Uses `pnpm`
+- Node.js: recommended **Node 20+**
+- Package manager: **pnpm**
 
 ```bash
 pnpm install
-pnpm build
 ```
 
-## Development
+Copy env template:
+
+```bash
+cp .env.example .env
+```
+
+Run in dev/watch mode:
 
 ```bash
 pnpm dev
 ```
 
-## Testing
+Build:
 
-There are currently no automated tests. CI runs typecheck/build.
+```bash
+pnpm build
+```
 
-## Code style
+## Repository hygiene
 
-- Keep changes small and easy to review.
-- Prefer explicit, boring code over cleverness.
-- Avoid adding new runtime dependencies unless there’s a clear reason.
+- **Do not commit secrets.** Never commit `.env` or tokens.
+- If you suspect a secret was committed, assume it is compromised and rotate it.
+- Prefer small, focused PRs.
 
-## Security
+## Pull requests
 
-- **Never commit secrets** (Discord bot tokens, private keys, etc.).
-- Use `.env` locally; keep `.env.example` up to date.
-- If you suspect a token was committed, rotate it immediately.
+- Keep changes scoped (one concern per PR where possible).
+- Update README/docs when behavior changes.
+- Ensure `pnpm build` passes.
 
-## Submitting changes
+## Reporting issues
 
-1. Create a branch.
-2. Make your change.
-3. Ensure `pnpm build` passes.
-4. Open a PR describing the motivation and approach.
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the MIT License.
+When filing a bug, please include:
+- what you expected vs. what happened
+- steps to reproduce
+- your Node/pnpm versions
+- relevant logs (redact tokens)

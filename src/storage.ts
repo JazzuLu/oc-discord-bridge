@@ -28,11 +28,30 @@ export class JsonStore {
 
   async readJson<T>(name: string, fallback: T): Promise<T> {
     await this.ensureDir();
+    const filePath = this.file(name);
     try {
-      const raw = await fs.readFile(this.file(name), 'utf8');
+      const raw = await fs.readFile(filePath, 'utf8');
       return JSON.parse(raw) as T;
     } catch (e: any) {
       if (e?.code === 'ENOENT') return fallback;
+
+      const isSyntax = e instanceof SyntaxError || e?.name === 'SyntaxError';
+      if (isSyntax) {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const backupPath = this.file(`${name}.corrupt.${stamp}`);
+
+        // Best-effort: keep the corrupt file for later inspection.
+        await fs.rename(filePath, backupPath).catch(() => null);
+
+        // Reset the store so we don't repeatedly crash on startup.
+        await this.writeJson(name, fallback).catch(() => null);
+
+        console.warn(
+          `[oc-bridge] JsonStore: corrupted JSON (${name}); backed up to ${backupPath}; reset to fallback`,
+        );
+        return fallback;
+      }
+
       throw e;
     }
   }

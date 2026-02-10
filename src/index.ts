@@ -21,6 +21,19 @@ import {
 import type { ChatInputCommandInteraction, Message, TextChannel, ThreadChannel } from 'discord.js';
 
 const cfg = loadConfig(process.env);
+
+// NOTE: OPENCODE_ACP_HOSTNAME/OPENCODE_ACP_PORT are currently not used.
+// The bridge always spawns a local `opencode acp` process.
+// Surface this as an explicit warning to avoid silent misconfiguration.
+if (
+  (process.env.OPENCODE_ACP_HOSTNAME && process.env.OPENCODE_ACP_HOSTNAME !== '127.0.0.1') ||
+  (process.env.OPENCODE_ACP_PORT && String(process.env.OPENCODE_ACP_PORT).trim() !== '' && Number(process.env.OPENCODE_ACP_PORT) !== 0)
+) {
+  console.warn(
+    '[oc-bridge] config: OPENCODE_ACP_HOSTNAME/OPENCODE_ACP_PORT are set but currently ignored; remote ACP mode is not implemented',
+  );
+}
+
 const store = new JsonStore(cfg.DATA_DIR);
 
 const FILE_CHANNEL_CWD = 'channelCwd.json';
@@ -28,7 +41,9 @@ const FILE_CHANNEL_MAIN_THREAD = 'channelMainThread.json';
 const FILE_THREAD_SESSION = 'threadSession.json';
 const FILE_PAUSED = 'pausedChannels.json';
 
-const TOPIC_MAX = 1024;
+import { buildTopicWithCwd, isMainThreadName, parseCwdFromTopic } from './topic.js';
+import { hintMissingPermissionForSetTopic, runDiscordPreflightOnce } from './permissions.js';
+import { redactSecrets } from './redact.js';
 
 type LogCtx = {
   corr?: string;
@@ -60,9 +75,16 @@ function safeErrMeta(e: unknown): { err: string; stack?: string } {
     const anyE = e as any;
     const msg = anyE?.message ? String(anyE.message) : String(e);
     const stack = typeof anyE?.stack === 'string' ? anyE.stack : undefined;
-    return { err: msg.slice(0, 500), stack: stack ? stack.slice(0, 1500) : undefined };
+    const cleanedMsg = cfg.REDACT_SECRETS ? redactSecrets(msg) : msg;
+    const cleanedStack = cfg.REDACT_SECRETS && stack ? redactSecrets(stack) : stack;
+    return {
+      err: cleanedMsg.slice(0, 500),
+      stack: cleanedStack ? cleanedStack.slice(0, 1500) : undefined,
+    };
   }
-  return { err: String(e).slice(0, 500) };
+  const msg = String(e);
+  const cleaned = cfg.REDACT_SECRETS ? redactSecrets(msg) : msg;
+  return { err: cleaned.slice(0, 500) };
 }
 
 function logError(msg: string, ctx: LogCtx & { e?: unknown } = {}): void {
@@ -82,6 +104,19 @@ function logError(msg: string, ctx: LogCtx & { e?: unknown } = {}): void {
   ].filter(Boolean);
   console.error(parts.join(' '));
   if (meta?.stack) console.error(meta.stack);
+}
+
+function formatBytes(n?: number): string {
+  if (!Number.isFinite(n) || (n ?? 0) <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let v = n as number;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  const digits = i === 0 ? 0 : i === 1 ? 0 : 1;
+  return `${v.toFixed(digits)} ${units[i]}`;
 }
 
 async function retryWithBackoff<T>(
@@ -115,49 +150,6 @@ async function retryWithBackoff<T>(
  * when multiple messages arrive concurrently for the same parent channel.
  */
 const mainThreadLocks = new Map<string, Promise<ThreadChannel | null>>();
-
-
-function parseCwdFromTopic(topic: string | null | undefined): string | null {
-  if (!topic) return null;
-  const line = topic
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .find((s) => s.startsWith('CWD='));
-  if (!line) return null;
-  const cwd = line.slice('CWD='.length).trim();
-  return cwd || null;
-}
-
-/** Build a new topic string with the CWD= line replaced or appended. */
-function buildTopicWithCwd(existing: string | null | undefined, cwd: string): string {
-  const cwdLine = `CWD=${cwd}`;
-
-  // Split into lines; remove ALL existing CWD= lines to avoid accumulating duplicates.
-  const rawLines = (existing ?? '').split(/\r?\n/);
-  const nonCwdLines = rawLines.filter((l) => !l.trimStart().startsWith('CWD='));
-
-  // Keep the topic stable-ish by appending our CWD line to the end.
-  const lines = [...nonCwdLines, cwdLine];
-
-  let topic = lines.join('\n');
-
-  // Respect Discord 1024 char limit: trim older non-CWD lines from the top.
-  while (topic.length > TOPIC_MAX) {
-    const parts = topic.split('\n');
-    const removed = parts.findIndex((l) => !l.trimStart().startsWith('CWD='));
-    if (removed < 0) break; // only CWD lines remain; nothing else to trim
-    parts.splice(removed, 1);
-    topic = parts.join('\n');
-  }
-
-  return topic.slice(0, TOPIC_MAX);
-}
-
-/** Tolerant check: treat "main", "main ...", "main-…", "main:…" as the canonical main thread. */
-function isMainThreadName(name: string | null | undefined): boolean {
-  const n = (name ?? '').trim().toLowerCase();
-  return n === 'main' || n.startsWith('main ') || n.startsWith('main-') || n.startsWith('main:');
-}
 
 function allowUser(userId: string): boolean {
   const allow = cfg.DISCORD_ALLOW_USER_IDS;
@@ -369,16 +361,18 @@ async function streamToDiscord(
     if (!force && now - lastEdit < 350) return;
     lastEdit = now;
 
-    if (text.length <= 2000) {
-      await placeholder.edit(text || '');
+    const safeText = cfg.REDACT_SECRETS ? redactSecrets(text) : text;
+
+    if (safeText.length <= 2000) {
+      await placeholder.edit(safeText || '');
       return;
     }
 
     // If too long, finalize current message and continue in new replies.
     // Keep the placeholder capped at 2000.
-    const head = text.slice(0, 2000);
+    const head = safeText.slice(0, 2000);
     await placeholder.edit(head);
-    let rest = text.slice(2000);
+    let rest = safeText.slice(2000);
     while (rest.length > 0) {
       const part = rest.slice(0, 2000);
       // eslint-disable-next-line no-await-in-loop
@@ -427,6 +421,10 @@ async function main() {
     if (cfg.DISCORD_GUILD_ID) {
       await registerSlashCommands(cfg, client.user.id);
     }
+
+    // Preflight: try to surface missing intents / permissions early (no spam).
+    await runDiscordPreflightOnce(cfg, client);
+
     console.log(`[oc-bridge] ready as ${client.user.tag}`);
   });
 
@@ -457,8 +455,12 @@ async function main() {
           const ch = cix.channel;
           const { thread, parent } = getThreadAndParentChannel(ch);
           if (!thread || !parent) return void cix.reply({ content: 'Run this inside a thread', ephemeral: true });
+
+          // Must ACK interactions quickly, otherwise Discord shows "该应用程序未响应".
+          await cix.deferReply({ ephemeral: true });
+
           const cwd = await getChannelCwd(parent.id, parent.topic);
-          if (!cwd) return void cix.reply({ content: 'No CWD configured for this channel', ephemeral: true });
+          if (!cwd) return void cix.editReply({ content: 'No CWD configured for this channel' });
 
           const meta = { corr, channelId: parent.id, threadId: thread.id };
 
@@ -478,15 +480,18 @@ async function main() {
 
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId: res.sessionId, cwd, createdAt: now, updatedAt: now });
-          await cix.reply({ content: `Bound thread to NEW session: ${res.sessionId}`, ephemeral: true });
+          await cix.editReply({ content: `Bound thread to NEW session: ${res.sessionId}` });
         },
         switchSession: async (cix) => {
           const ch = cix.channel;
           const { thread, parent } = getThreadAndParentChannel(ch);
           if (!thread || !parent) return void cix.reply({ content: 'Run this inside a thread', ephemeral: true });
+
+          await cix.deferReply({ ephemeral: true });
+
           const sessionId = cix.options.getString('session_id', true);
           const cwd = await getChannelCwd(parent.id, parent.topic);
-          if (!cwd) return void cix.reply({ content: 'No CWD configured for this channel', ephemeral: true });
+          if (!cwd) return void cix.editReply({ content: 'No CWD configured for this channel' });
 
           const meta = { corr, channelId: parent.id, threadId: thread.id, sessionId };
 
@@ -506,26 +511,32 @@ async function main() {
 
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId, cwd, createdAt: now, updatedAt: now });
-          await cix.reply({ content: `Bound thread to session: ${sessionId}`, ephemeral: true });
+          await cix.editReply({ content: `Bound thread to session: ${sessionId}` });
         },
         pause: async (cix) => {
           const ch = cix.channel;
           const { parent } = getThreadAndParentChannel(ch);
           if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
+          await cix.deferReply({ ephemeral: true });
           await setChannelPaused(parent.id, true);
-          await cix.reply({ content: 'Paused forwarding in this channel', ephemeral: true });
+          await cix.editReply({ content: 'Paused forwarding in this channel' });
         },
         resume: async (cix) => {
           const ch = cix.channel;
           const { parent } = getThreadAndParentChannel(ch);
           if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
+          await cix.deferReply({ ephemeral: true });
           await setChannelPaused(parent.id, false);
-          await cix.reply({ content: 'Resumed forwarding in this channel', ephemeral: true });
+          await cix.editReply({ content: 'Resumed forwarding in this channel' });
         },
         cwdSet: async (cix) => {
           const ch = cix.channel;
           const { parent } = getThreadAndParentChannel(ch);
           if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
+
+          // Must ACK interactions quickly, otherwise Discord shows "该应用程序未响应".
+          await cix.deferReply({ ephemeral: true });
+
           const cwd = cix.options.getString('path', true);
 
           await upsertChannelCwd(parent.id, cwd);
@@ -534,24 +545,38 @@ async function main() {
           const newTopic = buildTopicWithCwd(fullParent.topic, cwd);
 
           let topicOk = true;
+          let topicHint: string | null = null;
           await fullParent.setTopic(newTopic).catch((e: any) => {
             topicOk = false;
+            topicHint = hintMissingPermissionForSetTopic(e);
             console.error('[oc-bridge] failed to set channel topic:', e?.message ?? e);
+            if (topicHint) {
+              console.error(`[oc-bridge] hint: missing permission for topic update: ${topicHint}`);
+            }
           });
 
-          await cix.reply({
+          await cix.editReply({
             content: topicOk
               ? `Set CWD for channel to: ${cwd} (topic updated)`
-              : `Set CWD for channel to: ${cwd} (WARNING: failed to update channel topic; check bot permissions)`,
-            ephemeral: true,
+              : `Set CWD for channel to: ${cwd} (WARNING: failed to update channel topic; required permission: ${topicHint ?? 'Manage Channels'})`,
           });
         },
       });
     } catch (e: any) {
       logError('interaction:error', { e });
       try {
+        // If we already ACKed the interaction, use editReply.
         // @ts-ignore
-        if (ix.isRepliable()) await ix.reply({ content: `Error: ${e?.message ?? String(e)}`, ephemeral: true });
+        if (ix.isRepliable && ix.isRepliable()) {
+          // @ts-ignore
+          if (ix.deferred || ix.replied) {
+            // @ts-ignore
+            await ix.editReply({ content: `Error: ${e?.message ?? String(e)}` });
+          } else {
+            // @ts-ignore
+            await ix.reply({ content: `Error: ${e?.message ?? String(e)}`, ephemeral: true });
+          }
+        }
       } catch {}
     }
   });
@@ -618,7 +643,27 @@ async function main() {
             try {
               // If ACP restarted, ensure the session binding is re-loaded before prompting.
               await oc.ensureSessionLoaded(sessionId, cwd, { ...meta, attempt });
-              await oc.prompt(sessionId, m.content, emit, { ...meta, attempt });
+
+              // Include attachment URLs so prompts like "see screenshot" have context.
+              const attachments = Array.from(m.attachments?.values?.() ?? []);
+              const attachmentText =
+                attachments.length === 0
+                  ? ''
+                  : `\n\n[Attachments]\n${attachments
+                      .map((a) => {
+                        const name = a.name ?? 'file';
+                        const type = (a as any)?.contentType ? String((a as any).contentType) : '';
+                        const size = formatBytes((a as any)?.size);
+                        const meta = [type, size].filter(Boolean).join(', ');
+                        return `- ${name}${meta ? ` (${meta})` : ''}: ${a.url}`;
+                      })
+                      .join('\n')}`;
+              const promptText = `${m.content ?? ''}${attachmentText}`.trim();
+
+              // If message has no text and no attachments, do nothing.
+              if (!promptText) return;
+
+              await oc.prompt(sessionId, promptText, emit, { ...meta, attempt });
             } catch (e) {
               logError('prompt:attempt_failed', { ...meta, e });
               throw e;

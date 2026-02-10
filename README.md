@@ -44,6 +44,12 @@ Fill in:
 - `DISCORD_GUILD_ID` (recommended; commands are registered **guild-scoped**)
 - `DISCORD_ALLOW_USER_IDS` (recommended allowlist)
 
+### 2.4) Enable gateway intents
+
+In the Discord Developer Portal:
+- Your app → **Bot** → **Privileged Gateway Intents**
+- Enable **Message Content Intent** (required to read message text).
+
 ### 2.5) Invite the bot to your server
 
 In the Discord Developer Portal, generate an OAuth2 URL with:

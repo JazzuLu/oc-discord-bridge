@@ -455,8 +455,12 @@ async function main() {
           const ch = cix.channel;
           const { thread, parent } = getThreadAndParentChannel(ch);
           if (!thread || !parent) return void cix.reply({ content: 'Run this inside a thread', ephemeral: true });
+
+          // Must ACK interactions quickly, otherwise Discord shows "该应用程序未响应".
+          await cix.deferReply({ ephemeral: true });
+
           const cwd = await getChannelCwd(parent.id, parent.topic);
-          if (!cwd) return void cix.reply({ content: 'No CWD configured for this channel', ephemeral: true });
+          if (!cwd) return void cix.editReply({ content: 'No CWD configured for this channel' });
 
           const meta = { corr, channelId: parent.id, threadId: thread.id };
 
@@ -476,15 +480,18 @@ async function main() {
 
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId: res.sessionId, cwd, createdAt: now, updatedAt: now });
-          await cix.reply({ content: `Bound thread to NEW session: ${res.sessionId}`, ephemeral: true });
+          await cix.editReply({ content: `Bound thread to NEW session: ${res.sessionId}` });
         },
         switchSession: async (cix) => {
           const ch = cix.channel;
           const { thread, parent } = getThreadAndParentChannel(ch);
           if (!thread || !parent) return void cix.reply({ content: 'Run this inside a thread', ephemeral: true });
+
+          await cix.deferReply({ ephemeral: true });
+
           const sessionId = cix.options.getString('session_id', true);
           const cwd = await getChannelCwd(parent.id, parent.topic);
-          if (!cwd) return void cix.reply({ content: 'No CWD configured for this channel', ephemeral: true });
+          if (!cwd) return void cix.editReply({ content: 'No CWD configured for this channel' });
 
           const meta = { corr, channelId: parent.id, threadId: thread.id, sessionId };
 
@@ -504,26 +511,32 @@ async function main() {
 
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId, cwd, createdAt: now, updatedAt: now });
-          await cix.reply({ content: `Bound thread to session: ${sessionId}`, ephemeral: true });
+          await cix.editReply({ content: `Bound thread to session: ${sessionId}` });
         },
         pause: async (cix) => {
           const ch = cix.channel;
           const { parent } = getThreadAndParentChannel(ch);
           if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
+          await cix.deferReply({ ephemeral: true });
           await setChannelPaused(parent.id, true);
-          await cix.reply({ content: 'Paused forwarding in this channel', ephemeral: true });
+          await cix.editReply({ content: 'Paused forwarding in this channel' });
         },
         resume: async (cix) => {
           const ch = cix.channel;
           const { parent } = getThreadAndParentChannel(ch);
           if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
+          await cix.deferReply({ ephemeral: true });
           await setChannelPaused(parent.id, false);
-          await cix.reply({ content: 'Resumed forwarding in this channel', ephemeral: true });
+          await cix.editReply({ content: 'Resumed forwarding in this channel' });
         },
         cwdSet: async (cix) => {
           const ch = cix.channel;
           const { parent } = getThreadAndParentChannel(ch);
           if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
+
+          // Must ACK interactions quickly, otherwise Discord shows "该应用程序未响应".
+          await cix.deferReply({ ephemeral: true });
+
           const cwd = cix.options.getString('path', true);
 
           await upsertChannelCwd(parent.id, cwd);
@@ -542,19 +555,28 @@ async function main() {
             }
           });
 
-          await cix.reply({
+          await cix.editReply({
             content: topicOk
               ? `Set CWD for channel to: ${cwd} (topic updated)`
               : `Set CWD for channel to: ${cwd} (WARNING: failed to update channel topic; required permission: ${topicHint ?? 'Manage Channels'})`,
-            ephemeral: true,
           });
         },
       });
     } catch (e: any) {
       logError('interaction:error', { e });
       try {
+        // If we already ACKed the interaction, use editReply.
         // @ts-ignore
-        if (ix.isRepliable()) await ix.reply({ content: `Error: ${e?.message ?? String(e)}`, ephemeral: true });
+        if (ix.isRepliable && ix.isRepliable()) {
+          // @ts-ignore
+          if (ix.deferred || ix.replied) {
+            // @ts-ignore
+            await ix.editReply({ content: `Error: ${e?.message ?? String(e)}` });
+          } else {
+            // @ts-ignore
+            await ix.reply({ content: `Error: ${e?.message ?? String(e)}`, ephemeral: true });
+          }
+        }
       } catch {}
     }
   });

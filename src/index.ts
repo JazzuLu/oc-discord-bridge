@@ -21,6 +21,19 @@ import {
 import type { ChatInputCommandInteraction, Message, TextChannel, ThreadChannel } from 'discord.js';
 
 const cfg = loadConfig(process.env);
+
+// NOTE: OPENCODE_ACP_HOSTNAME/OPENCODE_ACP_PORT are currently not used.
+// The bridge always spawns a local `opencode acp` process.
+// Surface this as an explicit warning to avoid silent misconfiguration.
+if (
+  (process.env.OPENCODE_ACP_HOSTNAME && process.env.OPENCODE_ACP_HOSTNAME !== '127.0.0.1') ||
+  (process.env.OPENCODE_ACP_PORT && String(process.env.OPENCODE_ACP_PORT).trim() !== '' && Number(process.env.OPENCODE_ACP_PORT) !== 0)
+) {
+  console.warn(
+    '[oc-bridge] config: OPENCODE_ACP_HOSTNAME/OPENCODE_ACP_PORT are set but currently ignored; remote ACP mode is not implemented',
+  );
+}
+
 const store = new JsonStore(cfg.DATA_DIR);
 
 const FILE_CHANNEL_CWD = 'channelCwd.json';

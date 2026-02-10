@@ -52,16 +52,16 @@ Binary name/path used to start OpenCode.
 ### `OPENCODE_ACP_AUTOSTART` (default: `true`)
 If `true`, the bridge starts its own `opencode acp` process.
 
-If `false`, you must start ACP yourself and point the bridge at it via `OPENCODE_ACP_HOSTNAME` + `OPENCODE_ACP_PORT`.
+If `false`, you must start ACP yourself.
+
+> Note: Remote ACP mode is **not implemented yet**. The bridge currently always spawns a local `opencode acp`
+> process and does not connect to an external ACP host/port.
 
 ### `OPENCODE_ACP_HOSTNAME` (default: `127.0.0.1`)
-Hostname/interface for the ACP server.
+Reserved for future remote ACP mode (currently ignored).
 
 ### `OPENCODE_ACP_PORT` (default: `0`)
-ACP port.
-
-- `0`: let OpenCode pick a random free port (recommended for local usage)
-- non-zero: fixed port (useful for debugging or if another process depends on it)
+Reserved for future remote ACP mode (currently ignored).
 
 ## Storage
 

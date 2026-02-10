@@ -30,6 +30,7 @@ const FILE_PAUSED = 'pausedChannels.json';
 
 import { buildTopicWithCwd, isMainThreadName, parseCwdFromTopic } from './topic.js';
 import { hintMissingPermissionForSetTopic, runDiscordPreflightOnce } from './permissions.js';
+import { redactSecrets } from './redact.js';
 
 type LogCtx = {
   corr?: string;
@@ -61,9 +62,16 @@ function safeErrMeta(e: unknown): { err: string; stack?: string } {
     const anyE = e as any;
     const msg = anyE?.message ? String(anyE.message) : String(e);
     const stack = typeof anyE?.stack === 'string' ? anyE.stack : undefined;
-    return { err: msg.slice(0, 500), stack: stack ? stack.slice(0, 1500) : undefined };
+    const cleanedMsg = cfg.REDACT_SECRETS ? redactSecrets(msg) : msg;
+    const cleanedStack = cfg.REDACT_SECRETS && stack ? redactSecrets(stack) : stack;
+    return {
+      err: cleanedMsg.slice(0, 500),
+      stack: cleanedStack ? cleanedStack.slice(0, 1500) : undefined,
+    };
   }
-  return { err: String(e).slice(0, 500) };
+  const msg = String(e);
+  const cleaned = cfg.REDACT_SECRETS ? redactSecrets(msg) : msg;
+  return { err: cleaned.slice(0, 500) };
 }
 
 function logError(msg: string, ctx: LogCtx & { e?: unknown } = {}): void {
@@ -340,16 +348,18 @@ async function streamToDiscord(
     if (!force && now - lastEdit < 350) return;
     lastEdit = now;
 
-    if (text.length <= 2000) {
-      await placeholder.edit(text || '');
+    const safeText = cfg.REDACT_SECRETS ? redactSecrets(text) : text;
+
+    if (safeText.length <= 2000) {
+      await placeholder.edit(safeText || '');
       return;
     }
 
     // If too long, finalize current message and continue in new replies.
     // Keep the placeholder capped at 2000.
-    const head = text.slice(0, 2000);
+    const head = safeText.slice(0, 2000);
     await placeholder.edit(head);
-    let rest = text.slice(2000);
+    let rest = safeText.slice(2000);
     while (rest.length > 0) {
       const part = rest.slice(0, 2000);
       // eslint-disable-next-line no-await-in-loop

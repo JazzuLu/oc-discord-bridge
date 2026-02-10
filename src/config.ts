@@ -32,6 +32,10 @@ export const ConfigSchema = z.object({
   DISCORD_IGNORE_BOTS: envBool(true),
   DISCORD_IGNORE_CHANNELS_WITHOUT_CWD: envBool(true),
 
+  // Optional: redact common secret patterns in logs + messages echoed back to Discord.
+  // Default false to avoid surprising output changes.
+  REDACT_SECRETS: envBool(false),
+
   OPENCODE_BIN: z.string().default('opencode'),
   OPENCODE_ACP_AUTOSTART: envBool(true),
   OPENCODE_ACP_HOSTNAME: z.string().default('127.0.0.1'),

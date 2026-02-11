@@ -24,6 +24,8 @@ A small Discord ↔ OpenCode (`opencode`) bridge that runs locally.
 
 - **No accidental pings from bot output**: all bot message sends/edits set `allowedMentions` to an explicit empty config (`parse: []`, `users: []`, `roles: []`).
   - This prevents relayed OpenCode output like `@everyone`, `@here`, or `<@roleId>` from generating notifications.
+- **Manual verification**: when the bridge is running, have an OpenCode session print `@everyone` (e.g., `print('@everyone ping test')`). The Discord thread should show the literal text without highlighting or pinging anyone. This manual check is the acceptance criterion for issue #274.
+
 
 ## Requirements
 

@@ -65,6 +65,22 @@ export const ConfigSchema = z.object({
   DISCORD_IGNORE_BOTS: envBool(true),
   DISCORD_IGNORE_CHANNELS_WITHOUT_CWD: envBool(true),
 
+  // Optional: require an explicit trigger before forwarding normal messages.
+  // Default 'off' for backwards compatibility.
+  // - off: forward everything (subject to allowlists + CWD mapping + pause)
+  // - mention: only forward messages that @mention the bot
+  // - prefix: only forward messages that start with DISCORD_FORWARD_TRIGGER_PREFIX
+  // - mention_or_prefix: accept either mention or prefix
+  DISCORD_FORWARD_TRIGGER_MODE: z
+    .preprocess((v) => (typeof v === 'string' ? v.trim().toLowerCase() : v),
+      z.enum(['off', 'mention', 'prefix', 'mention_or_prefix']),
+    )
+    .default('off'),
+
+  // Optional: prefix used when DISCORD_FORWARD_TRIGGER_MODE is 'prefix' or 'mention_or_prefix'.
+  // Default is chosen to be explicit and unlikely to collide with normal chat.
+  DISCORD_FORWARD_TRIGGER_PREFIX: z.string().default('!oc '),
+
   // Optional: comma-separated list of allowed absolute path prefixes for channel CWD.
   // When empty/unset, any absolute existing directory is accepted (backwards compatible).
   DISCORD_ALLOWED_CWD_PREFIXES: z

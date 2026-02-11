@@ -47,6 +47,25 @@ Safety switch.
 - `true`: only channels with an explicit `CWD=/abs/path` mapping (in channel topic or set via `/oc cwd ...`) will be processed.
 - `false`: channels without a mapping may be processed using `OPENCODE_DEFAULT_CWD` (if set).
 
+### `DISCORD_FORWARD_TRIGGER_MODE` (default: `off`)
+Optional UX/safety switch: require an explicit trigger before forwarding normal messages to OpenCode.
+
+Allowed values:
+- `off`: forward everything (subject to allowlists, CWD mapping, pause)
+- `mention`: only forward messages that @mention the bot
+- `prefix`: only forward messages that start with `DISCORD_FORWARD_TRIGGER_PREFIX`
+- `mention_or_prefix`: accept either mention or prefix
+
+### `DISCORD_FORWARD_TRIGGER_PREFIX` (default: `!oc `)
+Prefix used when `DISCORD_FORWARD_TRIGGER_MODE` is `prefix` or `mention_or_prefix`.
+
+Example:
+
+```bash
+DISCORD_FORWARD_TRIGGER_MODE=prefix
+DISCORD_FORWARD_TRIGGER_PREFIX="!oc "
+```
+
 ## Safety
 
 ### `REDACT_SECRETS` (default: `false`)

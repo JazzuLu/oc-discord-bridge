@@ -65,8 +65,27 @@ export const ConfigSchema = z.object({
   DISCORD_IGNORE_BOTS: envBool(true),
   DISCORD_IGNORE_CHANNELS_WITHOUT_CWD: envBool(true),
 
-  // Optional: comma-separated list of allowed absolute path prefixes for channel CWD.
-  // When empty/unset, any absolute existing directory is accepted (backwards compatible).
+  // Channel CWD validation knobs.
+  //
+  // DISCORD_CWD_ALLOW_ROOTS (preferred): comma-separated list of allowed absolute roots.
+  // If unset/empty, any absolute path is allowed (subject to existence rules).
+  //
+  // Back-compat: DISCORD_ALLOWED_CWD_PREFIXES is treated as an alias for DISCORD_CWD_ALLOW_ROOTS.
+  DISCORD_CWD_ALLOW_ROOTS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      (v ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+
+  // When true (default), CWD must exist and be a directory.
+  // Set false if you want to allow setting CWD before the directory exists.
+  DISCORD_CWD_REQUIRE_EXISTS: envBool(true),
+
+  // Deprecated alias (kept for compatibility).
   DISCORD_ALLOWED_CWD_PREFIXES: z
     .string()
     .optional()

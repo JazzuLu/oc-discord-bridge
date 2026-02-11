@@ -685,7 +685,7 @@ async function main() {
           const v = await validateChannelCwd(cfg, cwd);
           if (!v.ok) {
             return void cix.editReply({
-              content: `Rejected CWD: ${formatCwdValidationError(v)}. (Tip: configure DISCORD_ALLOWED_CWD_PREFIXES to restrict allowed roots)`,
+              content: `Rejected CWD: ${formatCwdValidationError(v)}. (Tip: configure DISCORD_CWD_ALLOW_ROOTS to restrict allowed roots)`,
             });
           }
 

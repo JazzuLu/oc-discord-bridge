@@ -38,6 +38,7 @@ const FILE_PAUSED = 'pausedChannels.json';
 
 import { buildTopicWithCwd, isMainThreadName, parseCwdFromTopic } from './topic.js';
 import { hintMissingPermissionForSetTopic, runDiscordPreflightOnce } from './permissions.js';
+import { decideForwardContent } from './forwarding.js';
 import { redactSecrets } from './redact.js';
 
 type LogCtx = {
@@ -810,7 +811,17 @@ async function main() {
                         return `- ${name}${meta ? ` (${meta})` : ''}: ${a.url}`;
                       })
                       .join('\n')}`;
-              const promptText = `${m.content ?? ''}${attachmentText}`.trim();
+              const botId = client.user?.id;
+              const mentionsBot = botId ? Boolean(m.mentions?.users?.has?.(botId)) : false;
+              const decision = decideForwardContent({
+                mode: cfg.DISCORD_FORWARD_MODE,
+                prefix: cfg.OC_PROMPT_PREFIX,
+                content: m.content ?? '',
+                mentionsBot,
+              });
+              if (!decision.ok) return;
+
+              const promptText = `${decision.content}${attachmentText}`.trim();
 
               // If message has no text and no attachments, do nothing.
               if (!promptText) return;

@@ -47,6 +47,23 @@ Safety switch.
 - `true`: only channels with an explicit `CWD=/abs/path` mapping (in channel topic or set via `/oc cwd ...`) will be processed.
 - `false`: channels without a mapping may be processed using `OPENCODE_DEFAULT_CWD` (if set).
 
+### `DISCORD_FORWARD_MODE` (default: `auto`)
+Controls which Discord messages are forwarded into OpenCode.
+
+- `auto`: forward all messages (backwards-compatible behavior)
+- `mention`: only forward if the message mentions the bot
+- `prefix`: only forward if the message starts with `OC_PROMPT_PREFIX` (and the prefix is stripped before sending to OpenCode)
+
+### `OC_PROMPT_PREFIX` (default: `oc:`)
+Only used when `DISCORD_FORWARD_MODE=prefix`.
+
+Example:
+
+```bash
+DISCORD_FORWARD_MODE=prefix
+OC_PROMPT_PREFIX=oc:
+```
+
 ## Safety
 
 ### `REDACT_SECRETS` (default: `false`)

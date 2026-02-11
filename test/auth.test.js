@@ -4,19 +4,24 @@ import assert from 'node:assert/strict';
 import { extractRoleIdsFromInteractionMember, isAuthorizedForOcSlash } from '../dist/auth.js';
 
 test('isAuthorizedForOcSlash: default-open when both allowlists empty (backwards compatible)', () => {
-  const cfg = { DISCORD_ALLOW_USER_IDS: [], DISCORD_ALLOW_ROLE_IDS: [] };
+  const cfg = { DISCORD_ALLOW_USER_IDS: [], DISCORD_ALLOW_ROLE_IDS: [], DISCORD_DEFAULT_DENY: false };
   assert.equal(isAuthorizedForOcSlash(cfg, 'u1', []), true);
   assert.equal(isAuthorizedForOcSlash(cfg, 'u2', ['r1']), true);
 });
 
+test('isAuthorizedForOcSlash: default-deny when DISCORD_DEFAULT_DENY=true and allowlists empty', () => {
+  const cfg = { DISCORD_ALLOW_USER_IDS: [], DISCORD_ALLOW_ROLE_IDS: [], DISCORD_DEFAULT_DENY: true };
+  assert.equal(isAuthorizedForOcSlash(cfg, 'u1', []), false);
+});
+
 test('isAuthorizedForOcSlash: allow by explicit user id allowlist', () => {
-  const cfg = { DISCORD_ALLOW_USER_IDS: ['u1'], DISCORD_ALLOW_ROLE_IDS: [] };
+  const cfg = { DISCORD_ALLOW_USER_IDS: ['u1'], DISCORD_ALLOW_ROLE_IDS: [], DISCORD_DEFAULT_DENY: false };
   assert.equal(isAuthorizedForOcSlash(cfg, 'u1', []), true);
   assert.equal(isAuthorizedForOcSlash(cfg, 'u2', []), false);
 });
 
 test('isAuthorizedForOcSlash: allow by role allowlist', () => {
-  const cfg = { DISCORD_ALLOW_USER_IDS: [], DISCORD_ALLOW_ROLE_IDS: ['r2'] };
+  const cfg = { DISCORD_ALLOW_USER_IDS: [], DISCORD_ALLOW_ROLE_IDS: ['r2'], DISCORD_DEFAULT_DENY: false };
   assert.equal(isAuthorizedForOcSlash(cfg, 'u1', ['r1', 'r2']), true);
   assert.equal(isAuthorizedForOcSlash(cfg, 'u1', ['r1']), false);
 });

@@ -18,7 +18,12 @@ import {
   isInScopeGuild,
   registerSlashCommands,
 } from './discord.js';
-import { extractRoleIdsFromInteractionMember, isAuthorizedForOcSlash } from './auth.js';
+import {
+  extractRoleIdsFromInteractionMember,
+  extractRoleIdsFromMessageMember,
+  isAuthorizedForMessage,
+  isAuthorizedForOcSlash,
+} from './auth.js';
 import { formatCwdValidationError, validateChannelCwd } from './cwd.js';
 import type { ChatInputCommandInteraction, Message, TextChannel, ThreadChannel } from 'discord.js';
 
@@ -141,10 +146,8 @@ async function retryWithBackoff<T>(
  */
 const mainThreadLocks = new Map<string, Promise<ThreadChannel | null>>();
 
-function allowUser(userId: string): boolean {
-  const allow = cfg.DISCORD_ALLOW_USER_IDS;
-  if (!allow || allow.length === 0) return true;
-  return allow.includes(userId);
+function allowUser(userId: string, memberRoleIds?: string[]): boolean {
+  return isAuthorizedForMessage(cfg, userId, memberRoleIds);
 }
 
 function allowParentChannel(channelId: string): boolean {
@@ -657,7 +660,8 @@ async function main() {
     try {
       if (!isInScopeGuild(cfg, m.guildId)) return;
       if (cfg.DISCORD_IGNORE_BOTS && m.author.bot) return;
-      if (!allowUser(m.author.id)) return;
+      const roleIds = extractRoleIdsFromMessageMember((m as any).member);
+      if (!allowUser(m.author.id, roleIds)) return;
 
       const corr = randomUUID().slice(0, 8);
 

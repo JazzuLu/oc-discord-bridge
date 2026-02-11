@@ -19,6 +19,7 @@ function envBool(defaultValue: boolean) {
 export const ConfigSchema = z.object({
   DISCORD_BOT_TOKEN: z.string().min(1),
   DISCORD_GUILD_ID: z.string().min(1).optional(),
+  // Optional: comma-separated list of allowed user IDs.
   DISCORD_ALLOW_USER_IDS: z
     .string()
     .optional()
@@ -42,8 +43,10 @@ export const ConfigSchema = z.object({
         .filter(Boolean),
     ),
 
-  // Optional: comma-separated list of role IDs allowed to use /oc slash commands.
-  // If both DISCORD_ALLOW_USER_IDS and DISCORD_ALLOW_ROLE_IDS are empty, /oc is open to all users.
+  // Optional: comma-separated list of role IDs allowed.
+  // Applies to:
+  // - /oc slash commands
+  // - message forwarding (MessageCreate)
   DISCORD_ALLOW_ROLE_IDS: z
     .string()
     .optional()
@@ -53,6 +56,11 @@ export const ConfigSchema = z.object({
         .map((s) => s.trim())
         .filter(Boolean),
     ),
+
+  // Security hardening (opt-in): when true, and both allowlists are empty,
+  // deny /oc + forwarding instead of default-open.
+  // Default false for backwards compatibility.
+  DISCORD_DEFAULT_DENY: envBool(false),
 
   DISCORD_IGNORE_BOTS: envBool(true),
   DISCORD_IGNORE_CHANNELS_WITHOUT_CWD: envBool(true),

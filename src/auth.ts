@@ -1,11 +1,16 @@
 import type { Config } from './config.js';
 
-export function isAuthorizedForOcSlash(cfg: Config, userId: string, memberRoleIds?: string[]): boolean {
+function isAuthorized(
+  cfg: Pick<Config, 'DISCORD_ALLOW_USER_IDS' | 'DISCORD_ALLOW_ROLE_IDS' | 'DISCORD_DEFAULT_DENY'>,
+  userId: string,
+  memberRoleIds?: string[],
+): boolean {
   const allowUsers = cfg.DISCORD_ALLOW_USER_IDS ?? [];
   const allowRoles = cfg.DISCORD_ALLOW_ROLE_IDS ?? [];
+  const defaultDeny = Boolean(cfg.DISCORD_DEFAULT_DENY);
 
-  // Default-open for backwards compatibility unless explicitly configured.
-  if (allowUsers.length === 0 && allowRoles.length === 0) return true;
+  // Backwards compatible default-open unless DISCORD_DEFAULT_DENY=true.
+  if (allowUsers.length === 0 && allowRoles.length === 0) return defaultDeny ? false : true;
 
   if (allowUsers.includes(userId)) return true;
 
@@ -17,6 +22,14 @@ export function isAuthorizedForOcSlash(cfg: Config, userId: string, memberRoleId
   }
 
   return false;
+}
+
+export function isAuthorizedForOcSlash(cfg: Config, userId: string, memberRoleIds?: string[]): boolean {
+  return isAuthorized(cfg, userId, memberRoleIds);
+}
+
+export function isAuthorizedForMessage(cfg: Config, userId: string, memberRoleIds?: string[]): boolean {
+  return isAuthorized(cfg, userId, memberRoleIds);
 }
 
 export function extractRoleIdsFromInteractionMember(member: unknown): string[] {
@@ -38,4 +51,9 @@ export function extractRoleIdsFromInteractionMember(member: unknown): string[] {
   }
 
   return [];
+}
+
+export function extractRoleIdsFromMessageMember(member: unknown): string[] {
+  // message.member is usually a GuildMember (RoleManager w/ cache)
+  return extractRoleIdsFromInteractionMember(member);
 }

@@ -39,6 +39,7 @@ const FILE_PAUSED = 'pausedChannels.json';
 import { buildTopicWithCwd, isMainThreadName, parseCwdFromTopic } from './topic.js';
 import { hintMissingPermissionForSetTopic, runDiscordPreflightOnce } from './permissions.js';
 import { redactSecrets } from './redact.js';
+import { streamToDiscord } from './streamToDiscord.js';
 
 type LogCtx = {
   corr?: string;
@@ -426,66 +427,6 @@ async function withDiscordRetry<T>(
   throw lastErr;
 }
 
-async function streamToDiscord(
-  msg: Message,
-  onChunk: (cb: (t: string) => void) => Promise<void>,
-): Promise<void> {
-  const placeholder = await withDiscordRetry(() => msg.reply('…'), { phase: 'reply_placeholder' });
-  let text = '';
-  let lastEdit = 0;
-
-  // Serialize Discord writes for this stream to avoid overlapping edits/replies under burst.
-  let q: Promise<void> = Promise.resolve();
-  const serial = (fn: () => Promise<void>) => {
-    q = q.then(fn, fn);
-    return q;
-  };
-
-  let scheduled: NodeJS.Timeout | null = null;
-  const scheduleFlush = (force = false) => {
-    if (force) return void flush(true);
-    if (scheduled) return;
-    scheduled = setTimeout(() => {
-      scheduled = null;
-      void flush(false);
-    }, 1200);
-  };
-
-  const flush = async (force = false) => {
-    const now = Date.now();
-    if (!force && now - lastEdit < 1100) return;
-    lastEdit = now;
-
-    const safeText = cfg.REDACT_SECRETS ? redactSecrets(text) : text;
-
-    await serial(async () => {
-      if (safeText.length <= 2000) {
-        await withDiscordRetry(() => placeholder.edit(safeText || ''), { phase: 'edit_placeholder' });
-        return;
-      }
-
-      // If too long, finalize current message and continue in new replies.
-      // Keep the placeholder capped at 2000.
-      const head = safeText.slice(0, 2000);
-      await withDiscordRetry(() => placeholder.edit(head), { phase: 'edit_placeholder_head' });
-      let rest = safeText.slice(2000);
-      while (rest.length > 0) {
-        const part = rest.slice(0, 2000);
-        // eslint-disable-next-line no-await-in-loop
-        await withDiscordRetry(() => msg.reply(part), { phase: 'reply_continuation' });
-        rest = rest.slice(2000);
-      }
-    });
-  };
-
-  await onChunk((t) => {
-    text += t;
-    scheduleFlush(false);
-  });
-  await flush(true);
-  if (scheduled) clearTimeout(scheduled);
-}
-
 async function main() {
   const client = createDiscordClient(cfg);
   const oc = new OpenCodeAcpClient(cfg.OPENCODE_BIN, process.cwd(), (msg, meta) => {
@@ -778,14 +719,16 @@ async function main() {
         messageId: m.id,
       });
 
-      await streamToDiscord(m, async (emit) => {
-        const meta = {
-          corr,
-          threadId: thread.id,
-          channelId: fullParent.id,
-          messageId: m.id,
-          sessionId,
-        };
+      await streamToDiscord(
+        m,
+        async (emit) => {
+          const meta = {
+            corr,
+            threadId: thread.id,
+            channelId: fullParent.id,
+            messageId: m.id,
+            sessionId,
+          };
 
         await retryWithBackoff(
           async (attempt) => {
@@ -830,7 +773,9 @@ async function main() {
             },
           },
         );
-      });
+      },
+        { withDiscordRetry, redact: cfg.REDACT_SECRETS, redactSecrets },
+      );
 
       const now = Date.now();
       await setThreadBinding(thread.id, { ...ensured.binding, updatedAt: now });

@@ -9,6 +9,7 @@ import {
   safeEdit,
   safeReply,
 } from '../dist/discordMentions.js';
+import { createDiscordClient } from '../dist/discord.js';
 
 test('contentNoMentions: forces allowedMentions parse/users/roles empty', () => {
   const opts = contentNoMentions('hi', { ephemeral: true, allowedMentions: { parse: ['users'] } });
@@ -53,4 +54,9 @@ test('ixReplyNoMentions/ixEditReplyNoMentions: force allowedMentions disabled', 
 
   const e = ixEditReplyNoMentions({ content: 'y', allowedMentions: { parse: ['roles'] } });
   assert.deepEqual(e.allowedMentions, ALLOWED_MENTIONS_NONE);
+});
+
+test('createDiscordClient: sets global default allowedMentions disabled', () => {
+  const client = createDiscordClient({});
+  assert.deepEqual(client.options.allowedMentions, ALLOWED_MENTIONS_NONE);
 });

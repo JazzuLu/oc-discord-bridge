@@ -38,6 +38,7 @@ const FILE_PAUSED = 'pausedChannels.json';
 
 import { buildTopicWithCwd, isMainThreadName, parseCwdFromTopic } from './topic.js';
 import { hintMissingPermissionForSetTopic, runDiscordPreflightOnce } from './permissions.js';
+import { setChannelTopicSafely } from './topicUpdater.js';
 import { redactSecrets } from './redact.js';
 
 type LogCtx = {
@@ -99,6 +100,36 @@ function logError(msg: string, ctx: LogCtx & { e?: unknown } = {}): void {
   ].filter(Boolean);
   console.error(parts.join(' '));
   if (meta?.stack) console.error(meta.stack);
+}
+
+function logWarning(msg: string, ctx: LogCtx & { e?: unknown } = {}): void {
+  const { e, ...rest } = ctx;
+  const meta = e ? safeErrMeta(e) : undefined;
+  const parts = [
+    '[oc-bridge]',
+    msg,
+    rest.corr ? `corr=${rest.corr}` : null,
+    rest.channelId ? `channel=${rest.channelId}` : null,
+    rest.threadId ? `thread=${rest.threadId}` : null,
+    rest.sessionId ? `session=${rest.sessionId}` : null,
+    rest.messageId ? `msg=${rest.messageId}` : null,
+    typeof (rest as any).attempt === 'number' ? `attempt=${(rest as any).attempt}` : null,
+    typeof (rest as any).delayMs === 'number' ? `delayMs=${(rest as any).delayMs}` : null,
+    meta?.err ? `err=${meta.err}` : null,
+  ].filter(Boolean);
+  console.warn(parts.join(' '));
+  if (meta?.stack) console.warn(meta.stack);
+}
+
+const TOPIC_WARNING_THROTTLE_MS = 60_000;
+const topicWarningTimestamps = new Map<string, number>();
+
+function logTopicWarningOnce(channelId: string, msg: string, ctx: LogCtx & { e?: unknown }) {
+  const now = Date.now();
+  const last = topicWarningTimestamps.get(channelId);
+  if (last && now - last < TOPIC_WARNING_THROTTLE_MS) return;
+  topicWarningTimestamps.set(channelId, now);
+  logWarning(msg, ctx);
 }
 
 function formatBytes(n?: number): string {
@@ -691,24 +722,25 @@ async function main() {
 
           await upsertChannelCwd(parent.id, v.cwd);
 
-          const fullParent = await parent.fetch().catch(() => parent);
-          const newTopic = buildTopicWithCwd(fullParent.topic, v.cwd);
+          const topicResult = await setChannelTopicSafely(parent, v.cwd);
 
-          let topicOk = true;
+          let topicMessage: string;
           let topicHint: string | null = null;
-          await fullParent.setTopic(newTopic).catch((e: any) => {
-            topicOk = false;
-            topicHint = hintMissingPermissionForSetTopic(e);
-            console.error('[oc-bridge] failed to set channel topic:', e?.message ?? e);
-            if (topicHint) {
-              console.error(`[oc-bridge] hint: missing permission for topic update: ${topicHint}`);
-            }
-          });
+          if (topicResult.status === 'updated') {
+            topicMessage = 'topic updated';
+          } else if (topicResult.status === 'skipped') {
+            topicMessage = 'topic already up-to-date';
+          } else {
+            topicMessage = 'WARNING: failed to update channel topic';
+            topicHint = hintMissingPermissionForSetTopic(topicResult.err);
+            logTopicWarningOnce(parent.id, 'topic:update_failed', { corr, channelId: parent.id, e: topicResult.err });
+          }
 
           await cix.editReply({
-            content: topicOk
-              ? `Set CWD for channel to: ${v.cwd} (topic updated)`
-              : `Set CWD for channel to: ${v.cwd} (WARNING: failed to update channel topic; required permission: ${topicHint ?? 'Manage Channels'})`,
+            content:
+              topicResult.status === 'failed'
+                ? `Set CWD for channel to: ${v.cwd} (WARNING: failed to update channel topic; required permission: ${topicHint ?? 'Manage Channels'})`
+                : `Set CWD for channel to: ${v.cwd} (${topicMessage})`,
           });
         },
       });

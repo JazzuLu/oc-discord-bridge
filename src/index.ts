@@ -38,7 +38,7 @@ const FILE_PAUSED = 'pausedChannels.json';
 
 import { buildTopicWithCwd, isMainThreadName, parseCwdFromTopic } from './topic.js';
 import { hintMissingPermissionForSetTopic, runDiscordPreflightOnce } from './permissions.js';
-import { redactSecrets } from './redact.js';
+import { redactForLogs, redactSecrets } from './redact.js';
 import { enqueueThreadWork, DEFAULT_THREAD_QUEUE_LIMIT } from './threadQueue.js';
 
 type LogCtx = {
@@ -75,15 +75,15 @@ function safeErrMeta(e: unknown): { err: string; stack?: string } {
     const anyE = e as any;
     const msg = anyE?.message ? String(anyE.message) : String(e);
     const stack = typeof anyE?.stack === 'string' ? anyE.stack : undefined;
-    const cleanedMsg = cfg.REDACT_SECRETS ? redactSecrets(msg) : msg;
-    const cleanedStack = cfg.REDACT_SECRETS && stack ? redactSecrets(stack) : stack;
+    const cleanedMsg = cfg.REDACT_SECRETS ? redactForLogs(msg) : msg;
+    const cleanedStack = cfg.REDACT_SECRETS && stack ? redactForLogs(stack) : stack;
     return {
       err: cleanedMsg.slice(0, 500),
       stack: cleanedStack ? cleanedStack.slice(0, 1500) : undefined,
     };
   }
   const msg = String(e);
-  const cleaned = cfg.REDACT_SECRETS ? redactSecrets(msg) : msg;
+  const cleaned = cfg.REDACT_SECRETS ? redactForLogs(msg) : msg;
   return { err: cleaned.slice(0, 500) };
 }
 

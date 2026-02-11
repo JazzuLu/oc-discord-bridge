@@ -428,7 +428,7 @@ async function main() {
         if (!isAuthorizedForOcSlash(cfg, ix.user.id, roleIds)) {
           await ix.reply({
             content:
-              'Not authorized to use /oc in this server. Ask an admin to add your user ID to DISCORD_ALLOW_USER_IDS or your role ID to DISCORD_ALLOW_ROLE_IDS.',
+              'Unauthorized: /oc is restricted in this server. Ask an admin to add your Discord user ID to DISCORD_ALLOW_USER_IDS (preferred) or add an allowed role ID to DISCORD_ALLOW_ROLE_IDS.',
             ephemeral: true,
           });
           return;

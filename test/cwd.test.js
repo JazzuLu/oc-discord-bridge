@@ -27,6 +27,24 @@ test('validateChannelCwd: accepts any existing absolute dir when prefixes unset'
   assert.deepEqual(r, { ok: true, cwd: tmp });
 });
 
+test('validateChannelCwd: rejects NUL byte', async () => {
+  const cfg = { DISCORD_ALLOWED_CWD_PREFIXES: [] };
+  const r = await validateChannelCwd(cfg, `/tmp\0evil`);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'contains_nul');
+});
+
+test('validateChannelCwd: rejects non-normalized absolute paths (.. segments)', async () => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'ocdb-cwd-'));
+  const sub = path.join(base, 'sub');
+  await fs.mkdir(sub);
+
+  const cfg = { DISCORD_ALLOWED_CWD_PREFIXES: [] };
+  const r = await validateChannelCwd(cfg, `${sub}${path.sep}..`);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'not_normalized');
+});
+
 test('validateChannelCwd: enforces allowed prefixes when configured', async () => {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'ocdb-cwd-'));
   const allowed = path.join(base, 'allowed');
@@ -42,4 +60,20 @@ test('validateChannelCwd: enforces allowed prefixes when configured', async () =
   const bad = await validateChannelCwd(cfg, denied);
   assert.equal(bad.ok, false);
   assert.equal(bad.reason, 'not_allowed');
+});
+
+test('validateChannelCwd: symlink inside allowed prefix cannot escape', async () => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'ocdb-cwd-'));
+  const allowed = path.join(base, 'allowed');
+  const outside = path.join(base, 'outside');
+  await fs.mkdir(allowed);
+  await fs.mkdir(outside);
+
+  const link = path.join(allowed, 'link-out');
+  await fs.symlink(outside, link);
+
+  const cfg = { DISCORD_ALLOWED_CWD_PREFIXES: [allowed] };
+  const r = await validateChannelCwd(cfg, link);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'not_allowed');
 });

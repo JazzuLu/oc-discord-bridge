@@ -38,6 +38,7 @@ const FILE_PAUSED = 'pausedChannels.json';
 
 import { buildTopicWithCwd, isMainThreadName, parseCwdFromTopic } from './topic.js';
 import { hintMissingPermissionForSetTopic, runDiscordPreflightOnce } from './permissions.js';
+import { ThreadQueue } from './threadQueue.js';
 import { redactSecrets } from './redact.js';
 
 type LogCtx = {
@@ -731,6 +732,8 @@ async function main() {
     }
   });
 
+  const threadQueue = new ThreadQueue();
+
   client.on('messageCreate', async (m: Message) => {
     try {
       if (!isInScopeGuild(cfg, m.guildId)) return;
@@ -761,79 +764,93 @@ async function main() {
 
       if (!thread || !parent) return;
 
-      // Fetch parent to get latest topic
-      const fullParent = await parent.fetch().catch(() => parent);
-
-      if (await isChannelPaused(fullParent.id)) return;
-
-      const ensured = await ensureThreadSession(oc, thread, fullParent);
-      if (!ensured.ok) return;
-
-      const { sessionId, cwd } = ensured.binding;
-      logInfo('prompt:start', {
-        corr,
-        channelId: fullParent.id,
-        threadId: thread.id,
-        sessionId,
-        messageId: m.id,
-      });
-
-      await streamToDiscord(m, async (emit) => {
-        const meta = {
-          corr,
+      // Backpressure: if a thread has too many pending prompts, reject new messages quickly.
+      if (threadQueue.depth(thread.id) >= cfg.DISCORD_THREAD_QUEUE_MAX_DEPTH) {
+        await withDiscordRetry(() => m.reply('This thread is busy (too many pending messages). Please wait and try again.'), {
+          phase: 'thread_backpressure',
           threadId: thread.id,
-          channelId: fullParent.id,
+          channelId: parent.id,
           messageId: m.id,
+          corr,
+        });
+        return;
+      }
+
+      await threadQueue.enqueue(thread.id, async () => {
+        // Fetch parent to get latest topic (do this inside the queue to preserve ordering).
+        const fullParent = await parent.fetch().catch(() => parent);
+
+        if (await isChannelPaused(fullParent.id)) return;
+
+        const ensured = await ensureThreadSession(oc, thread, fullParent);
+        if (!ensured.ok) return;
+
+        const { sessionId, cwd } = ensured.binding;
+        logInfo('prompt:start', {
+          corr,
+          channelId: fullParent.id,
+          threadId: thread.id,
           sessionId,
-        };
+          messageId: m.id,
+        });
 
-        await retryWithBackoff(
-          async (attempt) => {
-            if (attempt > 1) {
-              logInfo('prompt:retry', { ...meta, attempt });
-            }
-            try {
-              // If ACP restarted, ensure the session binding is re-loaded before prompting.
-              await oc.ensureSessionLoaded(sessionId, cwd, { ...meta, attempt });
+        await streamToDiscord(m, async (emit) => {
+          const meta = {
+            corr,
+            threadId: thread.id,
+            channelId: fullParent.id,
+            messageId: m.id,
+            sessionId,
+          };
 
-              // Include attachment URLs so prompts like "see screenshot" have context.
-              const attachments = Array.from(m.attachments?.values?.() ?? []);
-              const attachmentText =
-                attachments.length === 0
-                  ? ''
-                  : `\n\n[Attachments]\n${attachments
-                      .map((a) => {
-                        const name = a.name ?? 'file';
-                        const type = (a as any)?.contentType ? String((a as any).contentType) : '';
-                        const size = formatBytes((a as any)?.size);
-                        const meta = [type, size].filter(Boolean).join(', ');
-                        return `- ${name}${meta ? ` (${meta})` : ''}: ${a.url}`;
-                      })
-                      .join('\n')}`;
-              const promptText = `${m.content ?? ''}${attachmentText}`.trim();
+          await retryWithBackoff(
+            async (attempt) => {
+              if (attempt > 1) {
+                logInfo('prompt:retry', { ...meta, attempt });
+              }
+              try {
+                // If ACP restarted, ensure the session binding is re-loaded before prompting.
+                await oc.ensureSessionLoaded(sessionId, cwd, { ...meta, attempt });
 
-              // If message has no text and no attachments, do nothing.
-              if (!promptText) return;
+                // Include attachment URLs so prompts like "see screenshot" have context.
+                const attachments = Array.from(m.attachments?.values?.() ?? []);
+                const attachmentText =
+                  attachments.length === 0
+                    ? ''
+                    : `\n\n[Attachments]\n${attachments
+                        .map((a) => {
+                          const name = a.name ?? 'file';
+                          const type = (a as any)?.contentType ? String((a as any).contentType) : '';
+                          const size = formatBytes((a as any)?.size);
+                          const meta = [type, size].filter(Boolean).join(', ');
+                          return `- ${name}${meta ? ` (${meta})` : ''}: ${a.url}`;
+                        })
+                        .join('\n')}`;
+                const promptText = `${m.content ?? ''}${attachmentText}`.trim();
 
-              await oc.prompt(sessionId, promptText, emit, { ...meta, attempt });
-            } catch (e) {
-              logError('prompt:attempt_failed', { ...meta, e });
-              throw e;
-            }
-          },
-          {
-            attempts: 3,
-            baseDelayMs: 300,
-            onRetry: ({ attempt, delayMs, err }) => {
-              // Log retry scheduling with correlation ids (no secrets).
-              logError('prompt:retry_scheduled', { ...meta, attempt, delayMs, e: err });
+                // If message has no text and no attachments, do nothing.
+                if (!promptText) return;
+
+                await oc.prompt(sessionId, promptText, emit, { ...meta, attempt });
+              } catch (e) {
+                logError('prompt:attempt_failed', { ...meta, e });
+                throw e;
+              }
             },
-          },
-        );
-      });
+            {
+              attempts: 3,
+              baseDelayMs: 300,
+              onRetry: ({ attempt, delayMs, err }) => {
+                // Log retry scheduling with correlation ids (no secrets).
+                logError('prompt:retry_scheduled', { ...meta, attempt, delayMs, e: err });
+              },
+            },
+          );
+        });
 
-      const now = Date.now();
-      await setThreadBinding(thread.id, { ...ensured.binding, updatedAt: now });
+        const now = Date.now();
+        await setThreadBinding(thread.id, { ...ensured.binding, updatedAt: now });
+      });
     } catch (e) {
       logError('message:error', { e });
     }

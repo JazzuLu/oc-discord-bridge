@@ -401,6 +401,23 @@ async function main() {
     console.log(parts.join(' '));
   });
 
+  // Preload persisted thread↔session bindings into ACP desiredSessions so watchdog restarts
+  // can reload known sessions without waiting for traffic (issue #640).
+  try {
+    const map = await store.readJson<ThreadSessionMap>(FILE_THREAD_SESSION, {});
+    let count = 0;
+    for (const [threadId, binding] of Object.entries(map)) {
+      if (!binding?.sessionId || !binding?.cwd) continue;
+      oc.trackSession(binding.sessionId, binding.cwd, { threadId });
+      count += 1;
+    }
+    if (count > 0) {
+      console.log(`[oc-bridge] preload:desiredSessions count=${count}`);
+    }
+  } catch (e) {
+    logError('preload:desiredSessions_failed', { e });
+  }
+
   if (cfg.OPENCODE_ACP_AUTOSTART) {
     await oc.start({ watchdog: true });
   }

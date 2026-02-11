@@ -147,6 +147,12 @@ function allowUser(userId: string): boolean {
   return allow.includes(userId);
 }
 
+function allowParentChannel(channelId: string): boolean {
+  const allow = cfg.DISCORD_ALLOW_CHANNEL_IDS;
+  if (!allow || allow.length === 0) return true;
+  return allow.includes(channelId);
+}
+
 async function upsertChannelCwd(channelId: string, cwd: string): Promise<void> {
   await store.updateJson<ChannelCwdMap>(FILE_CHANNEL_CWD, {}, (map) => {
     map[channelId] = { cwd, updatedAt: Date.now() };
@@ -477,6 +483,12 @@ async function main() {
         }
       }
 
+      // Optional: restrict the bridge to an explicit set of parent channels.
+      // (Security hardening: prevent accidental "whole-server" enablement.)
+      const ixCh = await ix.channel?.fetch?.().catch(() => ix.channel);
+      const { parent: ixParent } = getThreadAndParentChannel(ixCh as any);
+      if (ixParent && !allowParentChannel(ixParent.id)) return;
+
       await handleInteraction(ix, {
         status: async (cix: ChatInputCommandInteraction) => {
           const ch = cix.channel;
@@ -652,6 +664,7 @@ async function main() {
       // Ensure we have full channel objects (topics on parents are often missing on partials)
       const ch = await m.channel.fetch().catch(() => m.channel);
       let { thread, parent } = getThreadAndParentChannel(ch);
+      if (parent && !allowParentChannel(parent.id)) return;
 
       // If user is already in the canonical 'main' thread, remember it to avoid duplicates.
       if (thread && parent && isMainThreadName(thread.name)) {

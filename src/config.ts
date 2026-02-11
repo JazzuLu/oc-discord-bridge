@@ -29,6 +29,19 @@ export const ConfigSchema = z.object({
         .filter(Boolean),
     ),
 
+  // Optional: comma-separated list of allowed parent channel IDs.
+  // When set, the bridge will ignore messages/interactions outside these channels.
+  // (Threads are allowed iff their parent channel is allowed.)
+  DISCORD_ALLOW_CHANNEL_IDS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      (v ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+
   // Optional: comma-separated list of role IDs allowed to use /oc slash commands.
   // If both DISCORD_ALLOW_USER_IDS and DISCORD_ALLOW_ROLE_IDS are empty, /oc is open to all users.
   DISCORD_ALLOW_ROLE_IDS: z

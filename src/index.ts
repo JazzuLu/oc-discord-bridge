@@ -19,6 +19,7 @@ import {
   registerSlashCommands,
 } from './discord.js';
 import { extractRoleIdsFromInteractionMember, isAuthorizedForOcSlash } from './auth.js';
+import { formatCwdValidationError, validateChannelCwd } from './cwd.js';
 import type { ChatInputCommandInteraction, Message, TextChannel, ThreadChannel } from 'discord.js';
 
 const cfg = loadConfig(process.env);
@@ -166,11 +167,31 @@ async function getChannelMainThreadId(channelId: string): Promise<string | null>
 async function getChannelCwd(channelId: string, topic: string | null | undefined): Promise<string | null> {
   const fromTopic = parseCwdFromTopic(topic);
   if (fromTopic) {
-    await upsertChannelCwd(channelId, fromTopic);
-    return fromTopic;
+    const v = await validateChannelCwd(cfg, fromTopic);
+    if (v.ok) {
+      await upsertChannelCwd(channelId, v.cwd);
+      return v.cwd;
+    }
+    // Ignore invalid topic CWD (security hardening, issue #614)
+    logError('cwd:invalid_topic_ignored', { channelId, e: { reason: v.reason } });
   }
+
   const map = await store.readJson<ChannelCwdMap>(FILE_CHANNEL_CWD, {});
-  return map[channelId]?.cwd ?? cfg.OPENCODE_DEFAULT_CWD ?? null;
+  const stored = map[channelId]?.cwd;
+  if (stored) {
+    const v = await validateChannelCwd(cfg, stored);
+    if (v.ok) return v.cwd;
+    logError('cwd:invalid_stored_ignored', { channelId, e: { reason: v.reason } });
+  }
+
+  const def = cfg.OPENCODE_DEFAULT_CWD ?? null;
+  if (def) {
+    const v = await validateChannelCwd(cfg, def);
+    if (v.ok) return v.cwd;
+    logError('cwd:invalid_default_ignored', { channelId, e: { reason: v.reason } });
+  }
+
+  return null;
 }
 
 async function isChannelPaused(channelId: string): Promise<boolean> {
@@ -457,17 +478,26 @@ async function main() {
           const ch = cix.channel;
           const { thread, parent } = getThreadAndParentChannel(ch);
           if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
+          const topicCwd = parseCwdFromTopic(parent.topic);
+          const topicCwdValidation = topicCwd ? await validateChannelCwd(cfg, topicCwd) : null;
+
           const cwd = await getChannelCwd(parent.id, parent.topic);
           const paused = await isChannelPaused(parent.id);
           const binding = thread ? await getThreadBinding(thread.id) : null;
+
+          const lines = [
+            `channel: ${parent.id}`,
+            `cwd: ${cwd ?? '(none)'}`,
+            `paused: ${paused}`,
+            `thread: ${thread?.id ?? '(none)'}`,
+            `session: ${binding?.sessionId ?? '(none)'}`,
+          ];
+          if (topicCwd && topicCwdValidation && !topicCwdValidation.ok) {
+            lines.push(`topic CWD ignored: ${formatCwdValidationError(topicCwdValidation)}`);
+          }
+
           await cix.reply({
-            content: [
-              `channel: ${parent.id}`,
-              `cwd: ${cwd ?? '(none)'}`,
-              `paused: ${paused}`,
-              `thread: ${thread?.id ?? '(none)'}`,
-              `session: ${binding?.sessionId ?? '(none)'}`,
-            ].join('\n'),
+            content: lines.join('\n'),
             ephemeral: true,
           });
         },
@@ -558,11 +588,17 @@ async function main() {
           await cix.deferReply({ ephemeral: true });
 
           const cwd = cix.options.getString('path', true);
+          const v = await validateChannelCwd(cfg, cwd);
+          if (!v.ok) {
+            return void cix.editReply({
+              content: `Rejected CWD: ${formatCwdValidationError(v)}. (Tip: configure DISCORD_ALLOWED_CWD_PREFIXES to restrict allowed roots)`,
+            });
+          }
 
-          await upsertChannelCwd(parent.id, cwd);
+          await upsertChannelCwd(parent.id, v.cwd);
 
           const fullParent = await parent.fetch().catch(() => parent);
-          const newTopic = buildTopicWithCwd(fullParent.topic, cwd);
+          const newTopic = buildTopicWithCwd(fullParent.topic, v.cwd);
 
           let topicOk = true;
           let topicHint: string | null = null;
@@ -577,8 +613,8 @@ async function main() {
 
           await cix.editReply({
             content: topicOk
-              ? `Set CWD for channel to: ${cwd} (topic updated)`
-              : `Set CWD for channel to: ${cwd} (WARNING: failed to update channel topic; required permission: ${topicHint ?? 'Manage Channels'})`,
+              ? `Set CWD for channel to: ${v.cwd} (topic updated)`
+              : `Set CWD for channel to: ${v.cwd} (WARNING: failed to update channel topic; required permission: ${topicHint ?? 'Manage Channels'})`,
           });
         },
       });

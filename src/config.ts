@@ -44,6 +44,18 @@ export const ConfigSchema = z.object({
   DISCORD_IGNORE_BOTS: envBool(true),
   DISCORD_IGNORE_CHANNELS_WITHOUT_CWD: envBool(true),
 
+  // Optional: comma-separated list of allowed absolute path prefixes for channel CWD.
+  // When empty/unset, any absolute existing directory is accepted (backwards compatible).
+  DISCORD_ALLOWED_CWD_PREFIXES: z
+    .string()
+    .optional()
+    .transform((v) =>
+      (v ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+
   // Optional: redact common secret patterns in logs + messages echoed back to Discord.
   // Default false to avoid surprising output changes.
   REDACT_SECRETS: envBool(false),

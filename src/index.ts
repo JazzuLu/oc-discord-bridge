@@ -39,6 +39,7 @@ const FILE_PAUSED = 'pausedChannels.json';
 import { buildTopicWithCwd, isMainThreadName, parseCwdFromTopic } from './topic.js';
 import { hintMissingPermissionForSetTopic, runDiscordPreflightOnce } from './permissions.js';
 import { redactSecrets } from './redact.js';
+import { matchExplicitTrigger } from './trigger.js';
 
 type LogCtx = {
   corr?: string;
@@ -738,6 +739,23 @@ async function main() {
       const roleIds = extractRoleIdsFromMessageMember((m as any).member);
       if (!allowUser(m.author.id, roleIds)) return;
 
+      const botUser = client.user;
+      const isBotMentioned = Boolean(
+        botUser &&
+          // discord.js v14 has MessageMentions#has(user)
+          // @ts-ignore
+          (typeof m.mentions?.has === 'function' ? m.mentions.has(botUser) : m.mentions?.users?.has?.(botUser.id)),
+      );
+
+      const trigger = matchExplicitTrigger({
+        mode: cfg.DISCORD_FORWARD_TRIGGER_MODE,
+        prefix: cfg.DISCORD_FORWARD_TRIGGER_PREFIX,
+        content: m.content ?? '',
+        botUserId: botUser?.id,
+        isBotMentioned,
+      });
+      if (!trigger.matched) return;
+
       const corr = randomUUID().slice(0, 8);
 
       // Ensure we have full channel objects (topics on parents are often missing on partials)
@@ -810,7 +828,7 @@ async function main() {
                         return `- ${name}${meta ? ` (${meta})` : ''}: ${a.url}`;
                       })
                       .join('\n')}`;
-              const promptText = `${m.content ?? ''}${attachmentText}`.trim();
+              const promptText = `${trigger.content ?? ''}${attachmentText}`.trim();
 
               // If message has no text and no attachments, do nothing.
               if (!promptText) return;

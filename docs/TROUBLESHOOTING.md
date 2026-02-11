@@ -11,7 +11,7 @@ Common causes:
 
 - No `CWD=` mapping (and `DISCORD_IGNORE_CHANNELS_WITHOUT_CWD=true`).
 - Forwarding paused for that channel (`/oc status` will show `paused: true`).
-- `DISCORD_ALLOW_USER_IDS` is set and your user id is not in the allowlist.
+- `DISCORD_ALLOW_USER_IDS` / `DISCORD_ALLOW_ROLE_IDS` is set and you are not in the configured allowlist (by user id or role).
 - Missing permissions:
   - View Channel / Read Message History
   - Send Messages

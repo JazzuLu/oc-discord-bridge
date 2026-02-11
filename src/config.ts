@@ -16,6 +16,22 @@ function envBool(defaultValue: boolean) {
     .default(defaultValue);
 }
 
+function envInt(defaultValue: number) {
+  return z
+    .preprocess((v) => {
+      if (v == null) return defaultValue;
+      if (typeof v === 'number' && Number.isFinite(v)) return Math.trunc(v);
+      if (typeof v === 'string') {
+        const s = v.trim();
+        if (s === '') return defaultValue;
+        const n = Number(s);
+        return Number.isFinite(n) ? Math.trunc(n) : defaultValue;
+      }
+      return defaultValue;
+    }, z.number().int())
+    .default(defaultValue);
+}
+
 export const ConfigSchema = z.object({
   DISCORD_BOT_TOKEN: z.string().min(1),
   DISCORD_GUILD_ID: z.string().min(1).optional(),
@@ -64,6 +80,10 @@ export const ConfigSchema = z.object({
 
   DISCORD_IGNORE_BOTS: envBool(true),
   DISCORD_IGNORE_CHANNELS_WITHOUT_CWD: envBool(true),
+
+  // Backpressure/ordering: max number of pending prompts per Discord thread.
+  // When exceeded, new user messages in that thread are rejected with a "busy" reply.
+  DISCORD_THREAD_QUEUE_MAX_DEPTH: envInt(5),
 
   // Optional: comma-separated list of allowed absolute path prefixes for channel CWD.
   // When empty/unset, any absolute existing directory is accepted (backwards compatible).

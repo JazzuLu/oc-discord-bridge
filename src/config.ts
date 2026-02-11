@@ -65,6 +65,13 @@ export const ConfigSchema = z.object({
   DISCORD_IGNORE_BOTS: envBool(true),
   DISCORD_IGNORE_CHANNELS_WITHOUT_CWD: envBool(true),
 
+  // Message forwarding gating:
+  // - auto: forward all messages (backwards-compatible default)
+  // - mention: only forward messages that mention the bot
+  // - prefix: only forward messages that start with OC_PROMPT_PREFIX (prefix is stripped)
+  DISCORD_FORWARD_MODE: z.enum(['auto', 'mention', 'prefix']).default('auto'),
+  OC_PROMPT_PREFIX: z.string().default('oc:'),
+
   // Optional: comma-separated list of allowed absolute path prefixes for channel CWD.
   // When empty/unset, any absolute existing directory is accepted (backwards compatible).
   DISCORD_ALLOWED_CWD_PREFIXES: z

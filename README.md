@@ -91,6 +91,8 @@ All config is via environment variables:
 - `DISCORD_DEFAULT_DENY` (default: `false`; when `true`, deny by default unless an allowlist matches)
 - `DISCORD_IGNORE_BOTS` (default: `true`)
 - `DISCORD_IGNORE_CHANNELS_WITHOUT_CWD` (default: `true`)
+- `DISCORD_FORWARD_MODE` (default: `auto`; `auto|mention|prefix`)
+- `OC_PROMPT_PREFIX` (default: `oc:`; only used when `DISCORD_FORWARD_MODE=prefix`)
 - `DISCORD_ALLOWED_CWD_PREFIXES` (optional, comma-separated absolute path prefixes allowed for channel `CWD=`; when unset/empty, any existing absolute directory is accepted)
 - `OPENCODE_BIN` (default: `opencode`)
 - `OPENCODE_ACP_AUTOSTART` (default: `true`)
@@ -121,6 +123,25 @@ Notes:
 - If you talk in the parent text channel (not in a thread), the bridge will find or create a `main` thread and use it.
 
 This keeps context from different tasks separated (Discord threads map nicely to “one chat session”).
+
+### Forwarding gates (optional)
+
+By default (`DISCORD_FORWARD_MODE=auto`), all messages are forwarded.
+
+If you want a "push-to-talk" style setup in shared channels, you can gate forwarding:
+
+- `DISCORD_FORWARD_MODE=mention`: only forward messages that mention the bot.
+- `DISCORD_FORWARD_MODE=prefix`: only forward messages that start with `OC_PROMPT_PREFIX` (default: `oc:`). The prefix is stripped before the prompt is sent to OpenCode.
+
+Example:
+
+```bash
+DISCORD_FORWARD_MODE=prefix
+OC_PROMPT_PREFIX=oc:
+```
+Then, in Discord:
+
+- `oc: summarize what changed in this PR`
 
 ## Slash commands
 

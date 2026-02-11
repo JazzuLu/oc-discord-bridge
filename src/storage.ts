@@ -18,8 +18,31 @@ export type PausedChannelsMap = Record<string, true>;
 export class JsonStore {
   constructor(private dir: string) {}
 
+  /**
+   * Per-file async queue to prevent lost updates from concurrent read-modify-write cycles.
+   *
+   * NOTE: this is in-process only (not cross-process). It's still a big win for Discord
+   * message concurrency within a single running bridge instance.
+   */
+  private queues = new Map<string, Promise<unknown>>();
+
   private file(name: string) {
     return path.join(this.dir, name);
+  }
+
+  private enqueue<T>(name: string, task: () => Promise<T>): Promise<T> {
+    const prev = (this.queues.get(name) ?? Promise.resolve()) as Promise<unknown>;
+    const next = prev.then(task, task);
+
+    // Keep the queue alive even if task rejects, but release it when this task finishes.
+    this.queues.set(
+      name,
+      next.finally(() => {
+        if (this.queues.get(name) === next) this.queues.delete(name);
+      }),
+    );
+
+    return next;
   }
 
   async ensureDir() {
@@ -62,4 +85,17 @@ export class JsonStore {
     await fs.writeFile(tmp, JSON.stringify(value, null, 2) + '\n', 'utf8');
     await fs.rename(tmp, this.file(name));
   }
+
+  /**
+   * Atomic-ish read-modify-write helper (serialized per JSON file).
+   */
+  async updateJson<T>(name: string, fallback: T, fn: (cur: T) => T | Promise<T>): Promise<T> {
+    return this.enqueue(name, async () => {
+      const cur = await this.readJson<T>(name, fallback);
+      const next = await fn(cur);
+      await this.writeJson(name, next);
+      return next;
+    });
+  }
 }
+

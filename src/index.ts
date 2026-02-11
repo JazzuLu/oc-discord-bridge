@@ -39,6 +39,7 @@ const FILE_PAUSED = 'pausedChannels.json';
 import { buildTopicWithCwd, isMainThreadName, parseCwdFromTopic } from './topic.js';
 import { hintMissingPermissionForSetTopic, runDiscordPreflightOnce } from './permissions.js';
 import { redactSecrets } from './redact.js';
+import { ixEditReplyNoMentions, ixReplyNoMentions, safeEdit, safeReply } from './discordMentions.js';
 
 type LogCtx = {
   corr?: string;
@@ -430,7 +431,7 @@ async function streamToDiscord(
   msg: Message,
   onChunk: (cb: (t: string) => void) => Promise<void>,
 ): Promise<void> {
-  const placeholder = await withDiscordRetry(() => msg.reply('…'), { phase: 'reply_placeholder' });
+  const placeholder = await withDiscordRetry(() => safeReply(msg, '…'), { phase: 'reply_placeholder' });
   let text = '';
   let lastEdit = 0;
 
@@ -460,19 +461,19 @@ async function streamToDiscord(
 
     await serial(async () => {
       if (safeText.length <= 2000) {
-        await withDiscordRetry(() => placeholder.edit(safeText || ''), { phase: 'edit_placeholder' });
+        await withDiscordRetry(() => safeEdit(placeholder, safeText || ''), { phase: 'edit_placeholder' });
         return;
       }
 
       // If too long, finalize current message and continue in new replies.
       // Keep the placeholder capped at 2000.
       const head = safeText.slice(0, 2000);
-      await withDiscordRetry(() => placeholder.edit(head), { phase: 'edit_placeholder_head' });
+      await withDiscordRetry(() => safeEdit(placeholder, head), { phase: 'edit_placeholder_head' });
       let rest = safeText.slice(2000);
       while (rest.length > 0) {
         const part = rest.slice(0, 2000);
         // eslint-disable-next-line no-await-in-loop
-        await withDiscordRetry(() => msg.reply(part), { phase: 'reply_continuation' });
+        await withDiscordRetry(() => safeReply(msg, part), { phase: 'reply_continuation' });
         rest = rest.slice(2000);
       }
     });
@@ -552,11 +553,13 @@ async function main() {
       if (ix.isChatInputCommand() && ix.commandName === 'oc') {
         const roleIds = extractRoleIdsFromInteractionMember(ix.member);
         if (!isAuthorizedForOcSlash(cfg, ix.user.id, roleIds)) {
-          await ix.reply({
-            content:
-              'Unauthorized: /oc is restricted in this server. Ask an admin to add your Discord user ID to DISCORD_ALLOW_USER_IDS (preferred) or add an allowed role ID to DISCORD_ALLOW_ROLE_IDS.',
-            ephemeral: true,
-          });
+          await ix.reply(
+            ixReplyNoMentions({
+              content:
+                'Unauthorized: /oc is restricted in this server. Ask an admin to add your Discord user ID to DISCORD_ALLOW_USER_IDS (preferred) or add an allowed role ID to DISCORD_ALLOW_ROLE_IDS.',
+              ephemeral: true,
+            }),
+          );
           return;
         }
       }
@@ -571,7 +574,13 @@ async function main() {
         status: async (cix: ChatInputCommandInteraction) => {
           const ch = cix.channel;
           const { thread, parent } = getThreadAndParentChannel(ch);
-          if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
+          if (!parent)
+            return void cix.reply(
+              ixReplyNoMentions({
+                content: 'Not a text channel/thread',
+                ephemeral: true,
+              }),
+            );
           const topicCwd = parseCwdFromTopic(parent.topic);
           const topicCwdValidation = topicCwd ? await validateChannelCwd(cfg, topicCwd) : null;
 
@@ -590,21 +599,34 @@ async function main() {
             lines.push(`topic CWD ignored: ${formatCwdValidationError(topicCwdValidation)}`);
           }
 
-          await cix.reply({
-            content: lines.join('\n'),
-            ephemeral: true,
-          });
+          await cix.reply(
+            ixReplyNoMentions({
+              content: lines.join('\n'),
+              ephemeral: true,
+            }),
+          );
         },
         newSession: async (cix) => {
           const ch = cix.channel;
           const { thread, parent } = getThreadAndParentChannel(ch);
-          if (!thread || !parent) return void cix.reply({ content: 'Run this inside a thread', ephemeral: true });
+          if (!thread || !parent)
+            return void cix.reply(
+              ixReplyNoMentions({
+                content: 'Run this inside a thread',
+                ephemeral: true,
+              }),
+            );
 
           // Must ACK interactions quickly, otherwise Discord shows "该应用程序未响应".
           await cix.deferReply({ ephemeral: true });
 
           const cwd = await getChannelCwd(parent.id, parent.topic);
-          if (!cwd) return void cix.editReply({ content: 'No CWD configured for this channel' });
+          if (!cwd)
+            return void cix.editReply(
+              ixEditReplyNoMentions({
+                content: 'No CWD configured for this channel',
+              }),
+            );
 
           const meta = { corr, channelId: parent.id, threadId: thread.id };
 
@@ -624,18 +646,33 @@ async function main() {
 
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId: res.sessionId, cwd, createdAt: now, updatedAt: now });
-          await cix.editReply({ content: `Bound thread to NEW session: ${res.sessionId}` });
+          await cix.editReply(
+            ixEditReplyNoMentions({
+              content: `Bound thread to NEW session: ${res.sessionId}`,
+            }),
+          );
         },
         switchSession: async (cix) => {
           const ch = cix.channel;
           const { thread, parent } = getThreadAndParentChannel(ch);
-          if (!thread || !parent) return void cix.reply({ content: 'Run this inside a thread', ephemeral: true });
+          if (!thread || !parent)
+            return void cix.reply(
+              ixReplyNoMentions({
+                content: 'Run this inside a thread',
+                ephemeral: true,
+              }),
+            );
 
           await cix.deferReply({ ephemeral: true });
 
           const sessionId = cix.options.getString('session_id', true);
           const cwd = await getChannelCwd(parent.id, parent.topic);
-          if (!cwd) return void cix.editReply({ content: 'No CWD configured for this channel' });
+          if (!cwd)
+            return void cix.editReply(
+              ixEditReplyNoMentions({
+                content: 'No CWD configured for this channel',
+              }),
+            );
 
           const meta = { corr, channelId: parent.id, threadId: thread.id, sessionId };
 
@@ -655,28 +692,58 @@ async function main() {
 
           const now = Date.now();
           await setThreadBinding(thread.id, { sessionId, cwd, createdAt: now, updatedAt: now });
-          await cix.editReply({ content: `Bound thread to session: ${sessionId}` });
+          await cix.editReply(
+            ixEditReplyNoMentions({
+              content: `Bound thread to session: ${sessionId}`,
+            }),
+          );
         },
         pause: async (cix) => {
           const ch = cix.channel;
           const { parent } = getThreadAndParentChannel(ch);
-          if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
+          if (!parent)
+            return void cix.reply(
+              ixReplyNoMentions({
+                content: 'Not a text channel/thread',
+                ephemeral: true,
+              }),
+            );
           await cix.deferReply({ ephemeral: true });
           await setChannelPaused(parent.id, true);
-          await cix.editReply({ content: 'Paused forwarding in this channel' });
+          await cix.editReply(
+            ixEditReplyNoMentions({
+              content: 'Paused forwarding in this channel',
+            }),
+          );
         },
         resume: async (cix) => {
           const ch = cix.channel;
           const { parent } = getThreadAndParentChannel(ch);
-          if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
+          if (!parent)
+            return void cix.reply(
+              ixReplyNoMentions({
+                content: 'Not a text channel/thread',
+                ephemeral: true,
+              }),
+            );
           await cix.deferReply({ ephemeral: true });
           await setChannelPaused(parent.id, false);
-          await cix.editReply({ content: 'Resumed forwarding in this channel' });
+          await cix.editReply(
+            ixEditReplyNoMentions({
+              content: 'Resumed forwarding in this channel',
+            }),
+          );
         },
         cwdSet: async (cix) => {
           const ch = cix.channel;
           const { parent } = getThreadAndParentChannel(ch);
-          if (!parent) return void cix.reply({ content: 'Not a text channel/thread', ephemeral: true });
+          if (!parent)
+            return void cix.reply(
+              ixReplyNoMentions({
+                content: 'Not a text channel/thread',
+                ephemeral: true,
+              }),
+            );
 
           // Must ACK interactions quickly, otherwise Discord shows "该应用程序未响应".
           await cix.deferReply({ ephemeral: true });
@@ -684,9 +751,11 @@ async function main() {
           const cwd = cix.options.getString('path', true);
           const v = await validateChannelCwd(cfg, cwd);
           if (!v.ok) {
-            return void cix.editReply({
-              content: `Rejected CWD: ${formatCwdValidationError(v)}. (Tip: configure DISCORD_ALLOWED_CWD_PREFIXES to restrict allowed roots)`,
-            });
+            return void cix.editReply(
+              ixEditReplyNoMentions({
+                content: `Rejected CWD: ${formatCwdValidationError(v)}. (Tip: configure DISCORD_ALLOWED_CWD_PREFIXES to restrict allowed roots)`,
+              }),
+            );
           }
 
           await upsertChannelCwd(parent.id, v.cwd);
@@ -705,11 +774,13 @@ async function main() {
             }
           });
 
-          await cix.editReply({
-            content: topicOk
-              ? `Set CWD for channel to: ${v.cwd} (topic updated)`
-              : `Set CWD for channel to: ${v.cwd} (WARNING: failed to update channel topic; required permission: ${topicHint ?? 'Manage Channels'})`,
-          });
+          await cix.editReply(
+            ixEditReplyNoMentions({
+              content: topicOk
+                ? `Set CWD for channel to: ${v.cwd} (topic updated)`
+                : `Set CWD for channel to: ${v.cwd} (WARNING: failed to update channel topic; required permission: ${topicHint ?? 'Manage Channels'})`,
+            }),
+          );
         },
       });
     } catch (e: any) {
@@ -721,10 +792,19 @@ async function main() {
           // @ts-ignore
           if (ix.deferred || ix.replied) {
             // @ts-ignore
-            await ix.editReply({ content: `Error: ${e?.message ?? String(e)}` });
+            await ix.editReply(
+              ixEditReplyNoMentions({
+                content: `Error: ${e?.message ?? String(e)}`,
+              }),
+            );
           } else {
             // @ts-ignore
-            await ix.reply({ content: `Error: ${e?.message ?? String(e)}`, ephemeral: true });
+            await ix.reply(
+              ixReplyNoMentions({
+                content: `Error: ${e?.message ?? String(e)}`,
+                ephemeral: true,
+              }),
+            );
           }
         }
       } catch {}

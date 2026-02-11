@@ -20,6 +20,11 @@ A small Discord ↔ OpenCode (`opencode`) bridge that runs locally.
 - **Slash commands = escape hatch / control plane**
   - The bridge registers a single `/oc` command with subcommands to inspect and control mappings.
 
+## Security posture
+
+- **No accidental pings from bot output**: all bot message sends/edits set `allowedMentions` to an explicit empty config (`parse: []`, `users: []`, `roles: []`).
+  - This prevents relayed OpenCode output like `@everyone`, `@here`, or `<@roleId>` from generating notifications.
+
 ## Requirements
 
 - Node.js 22+

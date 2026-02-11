@@ -29,21 +29,27 @@ export const ConfigSchema = z.object({
         .filter(Boolean),
     ),
 
+  // Optional: comma-separated list of role IDs allowed to use /oc slash commands.
+  // If both DISCORD_ALLOW_USER_IDS and DISCORD_ALLOW_ROLE_IDS are empty, /oc is open to all users.
+  DISCORD_ALLOW_ROLE_IDS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      (v ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+
   DISCORD_IGNORE_BOTS: envBool(true),
   DISCORD_IGNORE_CHANNELS_WITHOUT_CWD: envBool(true),
 
+  // Optional: redact common secret patterns in logs + messages echoed back to Discord.
+  // Default false to avoid surprising output changes.
+  REDACT_SECRETS: envBool(false),
+
   OPENCODE_BIN: z.string().default('opencode'),
   OPENCODE_ACP_AUTOSTART: envBool(true),
-  OPENCODE_ACP_HOSTNAME: z.string().default('127.0.0.1'),
-  OPENCODE_ACP_PORT: z
-    .preprocess((v) => {
-      if (v == null) return 0;
-      const s = String(v).trim();
-      if (s === '') return 0;
-      const n = Number(s);
-      return Number.isFinite(n) ? n : 0;
-    }, z.number().int().min(0).max(65535))
-    .default(0),
   OPENCODE_DEFAULT_CWD: z.string().optional(),
 
   DATA_DIR: z.string().default('.data'),

@@ -11,9 +11,11 @@
 - For messages in a thread:
   - Ensure thread is mapped to an OpenCode session. If not, create session using the parent channel CWD.
   - Send the user message to OpenCode.
+  - If the Discord message includes attachments, include **URLs + basic metadata** (filename/contentType/size) in the prompt context (do **not** download the file automatically).
   - Stream response back by editing a single Discord message (preferred). If editing fails, fall back to chunked sends.
 
 ## Escape hatch (slash commands)
+- If `DISCORD_ALLOW_USER_IDS` or `DISCORD_ALLOW_ROLE_IDS` is set, only allow `/oc` usage by those users/roles.
 - /oc status (show: threadId, mapped sessionId, channel cwd)
 - /oc new (create new session, bind to current thread)
 - /oc switch <sessionId> (bind current thread to existing session)
@@ -36,5 +38,5 @@ Use ACP (`opencode acp`) for:
 
 ## Non-goals (for MVP)
 - Multi-user
-- Attachments/images
+- Automatic downloading of attachment files (we only forward URLs/metadata)
 - Permission prompts

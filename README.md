@@ -1,56 +1,79 @@
 # oc-discord-bridge
 
-A local Discord ↔ OpenCode (`opencode`) bridge.
+A small Discord ↔ OpenCode (`opencode`) bridge that runs locally.
 
-Core ideas:
-- **Channel → CWD mapping** via channel topic (`CWD=/absolute/path`).
-- **Thread = OpenCode session** (one thread keeps one session context).
-- **Slash commands** provide an escape hatch / admin controls.
+## How it works
 
-## What this is (and isn’t)
+- **Channel topic → working directory mapping**
+  - Set a Discord text channel topic to include a line like:
+    
+    ```
+    CWD=/absolute/path/to/your/repo
+    ```
+  - The bridge uses that `CWD=` as the project root for OpenCode operations.
+  - By default, channels **without** `CWD=` are ignored (safety).
 
-- This is meant to run **locally** (your laptop / workstation), where `opencode` can access your files.
-- It is **not** a hosted SaaS bot.
-- Treat it like a “Discord UI wrapper” around your local OpenCode.
+- **Thread = session**
+  - Each Discord thread is treated as an OpenCode session boundary.
+  - This keeps context isolated per task and makes it easy to run multiple threads in parallel.
+
+- **Slash commands = escape hatch / control plane**
+  - The bridge registers a single `/oc` command with subcommands to inspect and control mappings.
+
+## Requirements
+
+- Node.js 22+
+- pnpm (CI uses pnpm 9)
 
 ## Setup
 
-### Prereqs
-
-- Node.js 20+
-- pnpm
-- `opencode` on your PATH (or set `OPENCODE_BIN`)
-
-### Discord bot setup
-
-1. Create a Discord application + bot in the Developer Portal.
-2. Enable the bot intents you need (at least **Message Content Intent** if you want to forward raw message content).
-3. Invite the bot to your server (scopes: `bot`, `applications.commands`).
-4. Copy the bot token for `DISCORD_BOT_TOKEN`.
-
-### Install
+### 1) Install
 
 ```bash
 pnpm install
 ```
 
-> Tip: keep your real secrets only in `.env` (ignored by git). If you add new config knobs, update `.env.example`.
-
-### Configure
-
-1. Copy `.env.example` → `.env` and fill in values:
+### 2) Configure env
 
 ```bash
 cp .env.example .env
 ```
 
-2. Start in dev mode:
+Fill in:
+- `DISCORD_BOT_TOKEN`
+- `DISCORD_GUILD_ID` (recommended; commands are registered **guild-scoped**)
+- `DISCORD_ALLOW_USER_IDS` (recommended allowlist)
+- `DISCORD_ALLOW_ROLE_IDS` (optional; role allowlist for `/oc`)
+
+### 2.4) Enable gateway intents
+
+In the Discord Developer Portal:
+- Your app → **Bot** → **Privileged Gateway Intents**
+- Enable **Message Content Intent** (required to read message text).
+
+### 2.5) Invite the bot to your server
+
+In the Discord Developer Portal, generate an OAuth2 URL with:
+- **Scopes:** `bot`, `applications.commands`
+- **Bot permissions (minimum):**
+  - View Channels
+  - Read Message History
+  - Send Messages
+  - Send Messages in Threads (recommended)
+  - Manage Threads (recommended if you want the bridge to unarchive / keep threads usable)
+  - Create Public Threads (optional; only if you want the bridge to create threads)
+  - Manage Channels (optional; only if you want the bot to set the channel topic automatically)
+
+Discord docs (OAuth2 URL generator):
+https://discord.com/developers/applications → Your app → OAuth2 → URL Generator
+
+### 3) Run (dev)
 
 ```bash
 pnpm dev
 ```
 
-For production-ish local use:
+### 4) Run (prod-ish)
 
 ```bash
 pnpm build
@@ -64,13 +87,13 @@ All config is via environment variables:
 - `DISCORD_BOT_TOKEN` (required)
 - `DISCORD_GUILD_ID` (optional, but recommended for fast slash command iteration)
 - `DISCORD_ALLOW_USER_IDS` (optional, comma-separated allowlist)
+- `DISCORD_ALLOW_ROLE_IDS` (optional, comma-separated role allowlist for `/oc`)
 - `DISCORD_IGNORE_BOTS` (default: `true`)
 - `DISCORD_IGNORE_CHANNELS_WITHOUT_CWD` (default: `true`)
 - `OPENCODE_BIN` (default: `opencode`)
 - `OPENCODE_ACP_AUTOSTART` (default: `true`)
-- `OPENCODE_ACP_HOSTNAME` (default: `127.0.0.1`)
-- `OPENCODE_ACP_PORT` (default: `0`, random)
 - `OPENCODE_DEFAULT_CWD` (optional)
+- `REDACT_SECRETS` (default: `false`)
 - `DATA_DIR` (default: `.data`)
 
 See: [`.env.example`](./.env.example)
@@ -99,30 +122,65 @@ This keeps context from different tasks separated (Discord threads map nicely to
 
 ## Slash commands
 
-Guild-scoped commands (registered only when `DISCORD_GUILD_ID` is set):
+`/oc status`
+- Show current mapping + pause state (channel/thread).
 
-- `/oc status` — show channel/thread/session mapping status (ephemeral)
-- `/oc new` — bind current thread to a **new** OpenCode session (ephemeral)
-- `/oc switch session_id:<id>` — bind current thread to an existing session (ephemeral)
-- `/oc pause` — pause forwarding in this channel (ephemeral)
-- `/oc resume` — resume forwarding in this channel (ephemeral)
-- `/oc cwd path:<ABSOLUTE_PATH>` — set the channel CWD (tries to update topic) (ephemeral)
+`/oc new`
+- Create a new OpenCode session for the current thread.
 
-## CI
+`/oc switch session_id:<id>`
+- Bind this thread to an existing OpenCode session id.
 
-GitHub Actions runs `pnpm install --frozen-lockfile` + `pnpm build` on pushes and PRs.
+`/oc pause` / `/oc resume`
+- Pause/resume forwarding for the current channel.
 
-## Security / safety defaults
+`/oc cwd path:/absolute/path`
+- Explicitly set `cwd` for the channel (in addition to / instead of channel topic `CWD=`).
 
-- `.env` is ignored by git (do not commit secrets).
-- Optional allowlist: `DISCORD_ALLOW_USER_IDS`.
-- Optional guild scope: `DISCORD_GUILD_ID`.
-- By default, the bridge ignores channels without `CWD=` (`DISCORD_IGNORE_CHANNELS_WITHOUT_CWD=true`).
+## Safety / defaults
+
+- `.env` is ignored by git; commit only `.env.example`.
+- Channels without `CWD=` are ignored unless you explicitly set a default `OPENCODE_DEFAULT_CWD`.
+- If `REDACT_SECRETS=true`, the bridge will best-effort redact common token patterns in:
+  - logs (`err=` / stack traces)
+  - text echoed back to Discord
+- **Attachments are not downloaded.** If a Discord message has attachments, the bridge forwards only **URLs + basic metadata** (filename/contentType/size) into the OpenCode prompt context.
+- Per-guild/channel/thread state is persisted under `.data/` (so you can inspect/backup it easily):
+  - `.data/channelCwd.json`
+  - `.data/threadSession.json`
+  - `.data/pausedChannels.json`
+
+## Troubleshooting
+
+### Bot can’t set / update the channel topic
+
+- The bot needs the **Manage Channels** permission in that channel.
+- If you don’t want to grant that, you can still set the mapping via `/oc cwd path:/absolute/path` (it will persist in `.data/`).
+
+### Messages aren’t being forwarded
+
+Common causes:
+- No `CWD=` mapping (and `DISCORD_IGNORE_CHANNELS_WITHOUT_CWD=true`).
+- Forwarding paused for that channel (`/oc status` will show `paused: true`).
+- `DISCORD_ALLOW_USER_IDS` / `DISCORD_ALLOW_ROLE_IDS` is set and you are not in the configured allowlist (by user id or role).
+- The bot is missing permissions to **Read Messages / View Channel**, **Send Messages**, and (if you use the “main thread” convenience) **Create Public Threads**.
+
+### Slash commands don’t show up
+
+- Make sure `DISCORD_GUILD_ID` is set so commands are registered **guild-scoped**.
+- Re-run the bridge after changing env; Discord can take a short time to refresh commands.
+
+## Docs
+
+- Install & run: `docs/INSTALL.md`
+- Troubleshooting: `docs/TROUBLESHOOTING.md`
+- Spec: `docs/SPEC.md`
+- Config reference: `docs/CONFIG.md`
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md).
+See `CONTRIBUTING.md`.
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT (see `LICENSE`).

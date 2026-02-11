@@ -371,44 +371,119 @@ async function findOrCreateMainThreadInner(parent: TextChannel, m: Message): Pro
   return created;
 }
 
+function isDiscordRateLimitError(e: any): boolean {
+  const status = e?.status ?? e?.httpStatus ?? e?.response?.status;
+  return status === 429;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function withDiscordRetry<T>(
+  op: () => Promise<T>,
+  meta: Record<string, any>,
+  opts?: { attempts?: number; baseDelayMs?: number },
+): Promise<T> {
+  const attempts = opts?.attempts ?? 5;
+  const baseDelayMs = opts?.baseDelayMs ?? 400;
+
+  let lastErr: any;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      return await op();
+    } catch (e: any) {
+      lastErr = e;
+
+      const retryAfterMs =
+        // Discord REST sometimes returns retry_after in seconds.
+        typeof e?.retry_after === 'number' ? Math.ceil(e.retry_after * 1000) : null;
+
+      const shouldRetry =
+        isDiscordRateLimitError(e) ||
+        // transient network-ish issues
+        e?.code === 'ETIMEDOUT' ||
+        e?.code === 'ECONNRESET' ||
+        e?.code === 'ENOTFOUND' ||
+        // discord.js REST sometimes surfaces 5xx
+        (typeof (e?.status ?? e?.httpStatus) === 'number' && (e.status ?? e.httpStatus) >= 500);
+
+      if (!shouldRetry || attempt === attempts) break;
+
+      const backoff = Math.min(8000, baseDelayMs * 2 ** (attempt - 1));
+      const jitter = Math.floor(Math.random() * 250);
+      const delayMs = (retryAfterMs ?? backoff) + jitter;
+      console.warn(
+        `[oc-bridge] discord_retry attempt=${attempt} delayMs=${delayMs} err=${String(e?.message ?? e).slice(0, 200)}`,
+      );
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(delayMs);
+    }
+  }
+
+  logError('discord_op_failed', { ...meta, e: String(lastErr?.message ?? lastErr) });
+  throw lastErr;
+}
+
 async function streamToDiscord(
   msg: Message,
   onChunk: (cb: (t: string) => void) => Promise<void>,
 ): Promise<void> {
-  const placeholder = await msg.reply('…');
+  const placeholder = await withDiscordRetry(() => msg.reply('…'), { phase: 'reply_placeholder' });
   let text = '';
   let lastEdit = 0;
 
+  // Serialize Discord writes for this stream to avoid overlapping edits/replies under burst.
+  let q: Promise<void> = Promise.resolve();
+  const serial = (fn: () => Promise<void>) => {
+    q = q.then(fn, fn);
+    return q;
+  };
+
+  let scheduled: NodeJS.Timeout | null = null;
+  const scheduleFlush = (force = false) => {
+    if (force) return void flush(true);
+    if (scheduled) return;
+    scheduled = setTimeout(() => {
+      scheduled = null;
+      void flush(false);
+    }, 1200);
+  };
+
   const flush = async (force = false) => {
     const now = Date.now();
-    if (!force && now - lastEdit < 350) return;
+    if (!force && now - lastEdit < 1100) return;
     lastEdit = now;
 
     const safeText = cfg.REDACT_SECRETS ? redactSecrets(text) : text;
 
-    if (safeText.length <= 2000) {
-      await placeholder.edit(safeText || '');
-      return;
-    }
+    await serial(async () => {
+      if (safeText.length <= 2000) {
+        await withDiscordRetry(() => placeholder.edit(safeText || ''), { phase: 'edit_placeholder' });
+        return;
+      }
 
-    // If too long, finalize current message and continue in new replies.
-    // Keep the placeholder capped at 2000.
-    const head = safeText.slice(0, 2000);
-    await placeholder.edit(head);
-    let rest = safeText.slice(2000);
-    while (rest.length > 0) {
-      const part = rest.slice(0, 2000);
-      // eslint-disable-next-line no-await-in-loop
-      await msg.reply(part);
-      rest = rest.slice(2000);
-    }
+      // If too long, finalize current message and continue in new replies.
+      // Keep the placeholder capped at 2000.
+      const head = safeText.slice(0, 2000);
+      await withDiscordRetry(() => placeholder.edit(head), { phase: 'edit_placeholder_head' });
+      let rest = safeText.slice(2000);
+      while (rest.length > 0) {
+        const part = rest.slice(0, 2000);
+        // eslint-disable-next-line no-await-in-loop
+        await withDiscordRetry(() => msg.reply(part), { phase: 'reply_continuation' });
+        rest = rest.slice(2000);
+      }
+    });
   };
 
   await onChunk((t) => {
     text += t;
-    void flush(false);
+    scheduleFlush(false);
   });
   await flush(true);
+  if (scheduled) clearTimeout(scheduled);
 }
 
 async function main() {

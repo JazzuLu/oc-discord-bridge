@@ -148,15 +148,17 @@ function allowUser(userId: string): boolean {
 }
 
 async function upsertChannelCwd(channelId: string, cwd: string): Promise<void> {
-  const map = await store.readJson<ChannelCwdMap>(FILE_CHANNEL_CWD, {});
-  map[channelId] = { cwd, updatedAt: Date.now() };
-  await store.writeJson(FILE_CHANNEL_CWD, map);
+  await store.updateJson<ChannelCwdMap>(FILE_CHANNEL_CWD, {}, (map) => {
+    map[channelId] = { cwd, updatedAt: Date.now() };
+    return map;
+  });
 }
 
 async function upsertChannelMainThread(channelId: string, threadId: string): Promise<void> {
-  const map = await store.readJson<ChannelMainThreadMap>(FILE_CHANNEL_MAIN_THREAD, {});
-  map[channelId] = { threadId, updatedAt: Date.now() };
-  await store.writeJson(FILE_CHANNEL_MAIN_THREAD, map);
+  await store.updateJson<ChannelMainThreadMap>(FILE_CHANNEL_MAIN_THREAD, {}, (map) => {
+    map[channelId] = { threadId, updatedAt: Date.now() };
+    return map;
+  });
 }
 
 async function getChannelMainThreadId(channelId: string): Promise<string | null> {
@@ -200,10 +202,11 @@ async function isChannelPaused(channelId: string): Promise<boolean> {
 }
 
 async function setChannelPaused(channelId: string, on: boolean): Promise<void> {
-  const paused = await store.readJson<PausedChannelsMap>(FILE_PAUSED, {});
-  if (on) paused[channelId] = true;
-  else delete paused[channelId];
-  await store.writeJson(FILE_PAUSED, paused);
+  await store.updateJson<PausedChannelsMap>(FILE_PAUSED, {}, (paused) => {
+    if (on) paused[channelId] = true;
+    else delete paused[channelId];
+    return paused;
+  });
 }
 
 async function getThreadBinding(threadId: string): Promise<ThreadSessionMap[string] | null> {
@@ -212,9 +215,10 @@ async function getThreadBinding(threadId: string): Promise<ThreadSessionMap[stri
 }
 
 async function setThreadBinding(threadId: string, binding: ThreadSessionMap[string]): Promise<void> {
-  const map = await store.readJson<ThreadSessionMap>(FILE_THREAD_SESSION, {});
-  map[threadId] = binding;
-  await store.writeJson(FILE_THREAD_SESSION, map);
+  await store.updateJson<ThreadSessionMap>(FILE_THREAD_SESSION, {}, (map) => {
+    map[threadId] = binding;
+    return map;
+  });
 }
 
 async function ensureThreadSession(oc: OpenCodeAcpClient, thread: ThreadChannel, parent: TextChannel) {

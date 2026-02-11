@@ -12,6 +12,7 @@ import {
   ThreadChannel,
 } from 'discord.js';
 import type { Config } from './config.js';
+import { ALLOWED_MENTIONS_NONE } from './discordMentions.js';
 
 export type SlashHandlers = {
   status: (ix: ChatInputCommandInteraction) => Promise<void>;
@@ -24,6 +25,10 @@ export type SlashHandlers = {
 
 export function createDiscordClient(cfg: Config): Client {
   return new Client({
+    // Security hardening (issue #274): ensure bot output never triggers pings.
+    // We also enforce this at call sites (safeReply/safeEdit/ix* helpers), but
+    // setting it here provides a global default.
+    allowedMentions: ALLOWED_MENTIONS_NONE,
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,

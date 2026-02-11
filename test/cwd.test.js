@@ -13,6 +13,13 @@ test('validateChannelCwd: rejects relative paths', async () => {
   assert.equal(r.reason, 'not_absolute');
 });
 
+test('validateChannelCwd: rejects newline-containing values', async () => {
+  const cfg = { DISCORD_ALLOWED_CWD_PREFIXES: [] };
+  const r = await validateChannelCwd(cfg, '/tmp\n/evil');
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'contains_newline');
+});
+
 test('validateChannelCwd: rejects non-existent paths', async () => {
   const cfg = { DISCORD_ALLOWED_CWD_PREFIXES: [] };
   const r = await validateChannelCwd(cfg, path.join(os.tmpdir(), `nope-${Date.now()}-${Math.random()}`));
@@ -24,7 +31,36 @@ test('validateChannelCwd: accepts any existing absolute dir when prefixes unset'
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'ocdb-cwd-'));
   const cfg = { DISCORD_ALLOWED_CWD_PREFIXES: [] };
   const r = await validateChannelCwd(cfg, tmp);
-  assert.deepEqual(r, { ok: true, cwd: tmp });
+  assert.deepEqual(r, { ok: true, cwd: path.resolve(tmp) });
+});
+
+test('validateChannelCwd: normalizes paths (resolves .. segments)', async () => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'ocdb-cwd-'));
+  const child = path.join(base, 'child');
+  await fs.mkdir(child);
+
+  const cfg = { DISCORD_ALLOWED_CWD_PREFIXES: [] };
+  const r = await validateChannelCwd(cfg, path.join(child, '..'));
+  assert.deepEqual(r, { ok: true, cwd: path.resolve(base) });
+});
+
+test('validateChannelCwd: rejects newline-containing values', async () => {
+  const cfg = { DISCORD_ALLOWED_CWD_PREFIXES: [] };
+  const r = await validateChannelCwd(cfg, `/tmp\n/evil`);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, 'contains_newline');
+});
+
+test('validateChannelCwd: trims + normalizes with path.resolve', async () => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'ocdb-cwd-'));
+  const child = path.join(base, 'child');
+  await fs.mkdir(child);
+
+  const cfg = { DISCORD_ALLOWED_CWD_PREFIXES: [] };
+  const input = `  ${path.join(child, '..')}  `;
+  const r = await validateChannelCwd(cfg, input);
+
+  assert.deepEqual(r, { ok: true, cwd: base });
 });
 
 test('validateChannelCwd: enforces allowed prefixes when configured', async () => {

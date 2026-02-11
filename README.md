@@ -111,6 +111,11 @@ CWD=/absolute/path/to/your/project
 Notes:
 - The bridge looks for the **first** line starting with `CWD=`.
 - By default, channels without `CWD=` are ignored (safety).
+- CWD validation rules (applies to both channel topic and `/oc cwd`):
+  - Must be an **absolute path** (relative paths are rejected).
+  - Must be a **single line** (values containing `\n` / `\r` are rejected).
+  - Leading/trailing whitespace is trimmed.
+  - The stored value is normalized with `path.resolve(...)` (so `/a/b/..` becomes `/a`).
 - You can also set CWD using `/oc cwd path:<ABSOLUTE_PATH>`:
   - it will try to update the topic, and
   - it will cache the value for that channel.
@@ -138,6 +143,12 @@ This keeps context from different tasks separated (Discord threads map nicely to
 
 `/oc cwd path:/absolute/path`
 - Explicitly set `cwd` for the channel (in addition to / instead of channel topic `CWD=`).
+
+Examples:
+- ✅ `/oc cwd path:/Users/alice/code/my-repo`
+- ✅ `/oc cwd path:/Users/alice/code/my-repo/..` → stored as `/Users/alice/code`
+- ❌ `/oc cwd path:my-repo` (relative path rejected)
+- ❌ `/oc cwd path:"/Users/alice/code\n/tmp"` (newlines rejected)
 
 ## Safety / defaults
 

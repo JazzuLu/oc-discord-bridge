@@ -25,6 +25,21 @@ type DesiredSession = {
   meta?: Record<string, unknown>;
 };
 
+export class AcpRequestTimeoutError extends Error {
+  code = 'ACP_REQUEST_TIMEOUT' as const;
+  method: string;
+  id: number;
+  timeoutMs: number;
+
+  constructor(method: string, id: number, timeoutMs: number) {
+    super(`ACP request timeout: method=${method} id=${id} timeoutMs=${timeoutMs}`);
+    this.name = 'AcpRequestTimeoutError';
+    this.method = method;
+    this.id = id;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
 export class OpenCodeAcpClient {
   private proc?: ReturnType<typeof spawn>;
   private rl?: readline.Interface;
@@ -48,6 +63,9 @@ export class OpenCodeAcpClient {
   private restartQueued = false;
   private ready: Promise<void> = Promise.resolve();
 
+  private defaultRequestTimeoutMs = 20_000;
+  private promptTimeoutMs = 60_000;
+
   constructor(
     private bin: string,
     private cwd: string,
@@ -58,7 +76,11 @@ export class OpenCodeAcpClient {
       }
       console.log(parts.join(' '));
     },
-  ) {}
+    opts?: { requestTimeoutMs?: number; promptTimeoutMs?: number },
+  ) {
+    if (typeof opts?.requestTimeoutMs === 'number') this.defaultRequestTimeoutMs = opts.requestTimeoutMs;
+    if (typeof opts?.promptTimeoutMs === 'number') this.promptTimeoutMs = opts.promptTimeoutMs;
+  }
 
   private rememberMeta(meta?: Record<string, unknown>): void {
     if (!meta) return;
@@ -312,14 +334,14 @@ export class OpenCodeAcpClient {
       throw e;
     }
 
-    const timeoutMs = opts?.timeoutMs ?? 20_000;
+    const timeoutMs = opts?.timeoutMs ?? this.defaultRequestTimeoutMs;
 
     return new Promise((resolve, reject) => {
       let t: ReturnType<typeof setTimeout> | undefined;
       if (timeoutMs > 0) {
         t = setTimeout(() => {
           this.pending.delete(id);
-          const err = new Error(`ACP request timeout: method=${method} id=${id} timeoutMs=${timeoutMs}`);
+          const err = new AcpRequestTimeoutError(method, id, timeoutMs);
           reject(err);
 
           // If ACP stops responding, force a restart (watchdog will bring it back).
@@ -427,7 +449,7 @@ export class OpenCodeAcpClient {
               sessionId,
               prompt: [{ type: 'text', text }],
             },
-            { timeoutMs: 60_000 },
+            { timeoutMs: this.promptTimeoutMs },
             this.m({ sessionId, attempt, ...(meta ?? {}) }),
           );
           return;

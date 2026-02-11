@@ -16,6 +16,22 @@ function envBool(defaultValue: boolean) {
     .default(defaultValue);
 }
 
+function envInt(defaultValue: number) {
+  return z
+    .preprocess((v) => {
+      if (v == null) return defaultValue;
+      if (typeof v === 'number' && Number.isFinite(v)) return Math.floor(v);
+      if (typeof v === 'string') {
+        const s = v.trim();
+        if (s === '') return defaultValue;
+        const n = Number(s);
+        if (Number.isFinite(n)) return Math.floor(n);
+      }
+      return defaultValue;
+    }, z.number().int())
+    .default(defaultValue);
+}
+
 export const ConfigSchema = z.object({
   DISCORD_BOT_TOKEN: z.string().min(1),
   DISCORD_GUILD_ID: z.string().min(1).optional(),
@@ -83,6 +99,14 @@ export const ConfigSchema = z.object({
 
   OPENCODE_BIN: z.string().default('opencode'),
   OPENCODE_ACP_AUTOSTART: envBool(true),
+
+  // Default per-request timeout for ACP JSON-RPC calls.
+  // If <= 0, disables the timeout (not recommended).
+  OPENCODE_ACP_REQUEST_TIMEOUT_MS: envInt(20_000),
+
+  // Prompt requests can legitimately take longer; keep a separate default.
+  OPENCODE_ACP_PROMPT_TIMEOUT_MS: envInt(60_000),
+
   OPENCODE_DEFAULT_CWD: z.string().optional(),
 
   DATA_DIR: z.string().default('.data'),

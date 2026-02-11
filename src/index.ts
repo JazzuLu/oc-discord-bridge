@@ -508,6 +508,9 @@ async function main() {
       typeof (m as any).line === 'string' ? `line=${String((m as any).line).slice(0, 200)}` : null,
     ].filter(Boolean);
     console.log(parts.join(' '));
+  }, {
+    requestTimeoutMs: cfg.OPENCODE_ACP_REQUEST_TIMEOUT_MS,
+    promptTimeoutMs: cfg.OPENCODE_ACP_PROMPT_TIMEOUT_MS,
   });
 
   // Preload persisted thread↔session bindings into ACP desiredSessions so watchdog restarts

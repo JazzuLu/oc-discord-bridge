@@ -39,6 +39,7 @@ const FILE_PAUSED = 'pausedChannels.json';
 import { buildTopicWithCwd, isMainThreadName, parseCwdFromTopic } from './topic.js';
 import { hintMissingPermissionForSetTopic, runDiscordPreflightOnce } from './permissions.js';
 import { redactSecrets } from './redact.js';
+import { buildPromptTextFromMessage, hasMeaningfulUserText } from './messageFilter.js';
 
 type LogCtx = {
   corr?: string;
@@ -738,6 +739,10 @@ async function main() {
       const roleIds = extractRoleIdsFromMessageMember((m as any).member);
       if (!allowUser(m.author.id, roleIds)) return;
 
+      // Issue #406: ignore non-content messages (stickers/embeds/attachments-only/empty)
+      // and system/webhook messages.
+      if (!hasMeaningfulUserText(m)) return;
+
       const corr = randomUUID().slice(0, 8);
 
       // Ensure we have full channel objects (topics on parents are often missing on partials)
@@ -796,23 +801,9 @@ async function main() {
               // If ACP restarted, ensure the session binding is re-loaded before prompting.
               await oc.ensureSessionLoaded(sessionId, cwd, { ...meta, attempt });
 
-              // Include attachment URLs so prompts like "see screenshot" have context.
-              const attachments = Array.from(m.attachments?.values?.() ?? []);
-              const attachmentText =
-                attachments.length === 0
-                  ? ''
-                  : `\n\n[Attachments]\n${attachments
-                      .map((a) => {
-                        const name = a.name ?? 'file';
-                        const type = (a as any)?.contentType ? String((a as any).contentType) : '';
-                        const size = formatBytes((a as any)?.size);
-                        const meta = [type, size].filter(Boolean).join(', ');
-                        return `- ${name}${meta ? ` (${meta})` : ''}: ${a.url}`;
-                      })
-                      .join('\n')}`;
-              const promptText = `${m.content ?? ''}${attachmentText}`.trim();
+              const promptText = buildPromptTextFromMessage(m);
 
-              // If message has no text and no attachments, do nothing.
+              // Issue #406: By design we only forward when there's meaningful user-authored text.
               if (!promptText) return;
 
               await oc.prompt(sessionId, promptText, emit, { ...meta, attempt });

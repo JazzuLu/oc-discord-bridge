@@ -764,19 +764,8 @@ async function main() {
 
       if (!thread || !parent) return;
 
-      // Backpressure: if a thread has too many pending prompts, reject new messages quickly.
-      if (threadQueue.depth(thread.id) >= cfg.DISCORD_THREAD_QUEUE_MAX_DEPTH) {
-        await withDiscordRetry(() => m.reply('This thread is busy (too many pending messages). Please wait and try again.'), {
-          phase: 'thread_backpressure',
-          threadId: thread.id,
-          channelId: parent.id,
-          messageId: m.id,
-          corr,
-        });
-        return;
-      }
-
-      await threadQueue.enqueue(thread.id, async () => {
+      // Backpressure + ordering: try to enqueue atomically.
+      const queued = threadQueue.tryEnqueue(thread.id, cfg.DISCORD_THREAD_QUEUE_MAX_DEPTH, async () => {
         // Fetch parent to get latest topic (do this inside the queue to preserve ordering).
         const fullParent = await parent.fetch().catch(() => parent);
 
@@ -851,6 +840,19 @@ async function main() {
         const now = Date.now();
         await setThreadBinding(thread.id, { ...ensured.binding, updatedAt: now });
       });
+
+      if (!queued) {
+        await withDiscordRetry(() => m.reply('This thread is busy (too many pending messages). Please wait and try again.'), {
+          phase: 'thread_backpressure',
+          threadId: thread.id,
+          channelId: parent.id,
+          messageId: m.id,
+          corr,
+        });
+        return;
+      }
+
+      await queued;
     } catch (e) {
       logError('message:error', { e });
     }

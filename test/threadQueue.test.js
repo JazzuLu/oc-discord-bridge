@@ -64,3 +64,28 @@ test('ThreadQueue: depth increments while tasks are pending and drains to zero',
   await Promise.all([p1, p2]);
   assert.equal(q.depth('t1'), 0);
 });
+
+test('ThreadQueue: tryEnqueue enforces maxDepth atomically', async () => {
+  const q = new ThreadQueue();
+
+  let release;
+  const gate = new Promise((r) => {
+    release = r;
+  });
+
+  const first = q.tryEnqueue('t1', 1, async () => {
+    await gate;
+  });
+  assert.ok(first, 'first task should be accepted');
+  assert.equal(q.depth('t1'), 1);
+
+  const second = q.tryEnqueue('t1', 1, async () => {
+    throw new Error('should not run');
+  });
+  assert.equal(second, null);
+  assert.equal(q.depth('t1'), 1);
+
+  release();
+  await first;
+  assert.equal(q.depth('t1'), 0);
+});

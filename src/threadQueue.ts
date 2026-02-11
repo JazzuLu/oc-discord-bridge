@@ -18,7 +18,26 @@ export class ThreadQueue {
     return this.states.get(threadId)?.depth ?? 0;
   }
 
+  /**
+   * Enqueue a task unconditionally.
+   */
   enqueue<T>(threadId: string, task: ThreadQueueTask<T>): Promise<T> {
+    return this.enqueueInner(threadId, task);
+  }
+
+  /**
+   * Enqueue a task only if the per-thread queue depth is below maxDepth.
+   *
+   * This is atomic with respect to other tryEnqueue/enqueue calls on the same queue
+   * (i.e. prevents the check-then-enqueue race).
+   */
+  tryEnqueue<T>(threadId: string, maxDepth: number, task: ThreadQueueTask<T>): Promise<T> | null {
+    const cur = this.depth(threadId);
+    if (cur >= maxDepth) return null;
+    return this.enqueueInner(threadId, task);
+  }
+
+  private enqueueInner<T>(threadId: string, task: ThreadQueueTask<T>): Promise<T> {
     const state = this.states.get(threadId) ?? { tail: Promise.resolve(), depth: 0 };
     state.depth += 1;
 

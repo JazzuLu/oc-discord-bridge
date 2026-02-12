@@ -91,6 +91,7 @@ All config is via environment variables:
 - `DISCORD_BOT_TOKEN` (required)
 - `DISCORD_GUILD_ID` (optional, but recommended for fast slash command iteration)
 - `DISCORD_ALLOW_USER_IDS` (optional, comma-separated allowlist)
+  - If set to a non-empty list, **all `/oc` slash commands require the user ID to be in this list** (role allowlist will not grant access).
 - `DISCORD_ALLOW_ROLE_IDS` (optional, comma-separated role allowlist)
 - `DISCORD_DEFAULT_DENY` (default: `false`; when `true`, deny by default unless an allowlist matches)
 - `DISCORD_IGNORE_BOTS` (default: `true`)

@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 import { randomUUID } from 'node:crypto';
 // Be explicit: tsx/Node cwd differences can make dotenv/config miss the file.
 dotenv.config({ path: new URL('../.env', import.meta.url) });
-import { loadConfig } from './config.js';
+import { loadConfig, type Config } from './config.js';
 import {
   JsonStore,
   type ChannelCwdMap,
@@ -106,6 +106,26 @@ function logError(msg: string, ctx: LogCtx & { e?: unknown } = {}): void {
   ].filter(Boolean);
   console.error(parts.join(' '));
   if (meta?.stack) console.error(meta.stack);
+}
+
+let didLogSlashRegFailure = false;
+
+function logSlashCommandRegistrationFailureOnce(cfg: Config, e: unknown): void {
+  // Keep the bridge running even if Discord rejects command registration.
+  logError('slash:register_failed (continuing without /oc slash commands)', { e });
+
+  // Actionable hints (common misconfigurations):
+  const hints: string[] = [];
+  if (!cfg.DISCORD_GUILD_ID) {
+    hints.push('DISCORD_GUILD_ID is not set; guild-scoped command registration is skipped.');
+  } else {
+    hints.push(`Verify the bot is invited to guild ${cfg.DISCORD_GUILD_ID} with the "applications.commands" scope.`);
+  }
+  hints.push('Verify DISCORD_BOT_TOKEN is correct and the bot can access the Discord API.');
+  hints.push('If you just updated commands, try waiting a minute and restarting (Discord can be eventually consistent).');
+
+  console.error('[oc-bridge] slash:register_failed hints:');
+  for (const h of hints) console.error(`[oc-bridge]   - ${h}`);
 }
 
 function formatBytes(n?: number): string {
@@ -543,8 +563,19 @@ async function main() {
 
   client.on('ready', async () => {
     if (!client.user) return;
+
+    // Best-effort slash command registration.
+    // Reliability: do not crash the whole bridge if Discord rejects registration (issue #489).
     if (cfg.DISCORD_GUILD_ID) {
-      await registerSlashCommands(cfg, client.user.id);
+      try {
+        await registerSlashCommands(cfg, client.user.id);
+      } catch (e: any) {
+        // 'ready' can fire multiple times across reconnects; log this failure once to avoid spam.
+        if (!didLogSlashRegFailure) {
+          didLogSlashRegFailure = true;
+          logSlashCommandRegistrationFailureOnce(cfg, e);
+        }
+      }
     }
 
     // Preflight: try to surface missing intents / permissions early (no spam).

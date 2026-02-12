@@ -12,6 +12,7 @@ import {
   ThreadChannel,
 } from 'discord.js';
 import type { Config } from './config.js';
+import { DEFAULT_ALLOWED_MENTIONS } from './mentions.js';
 
 export type SlashHandlers = {
   status: (ix: ChatInputCommandInteraction) => Promise<void>;
@@ -30,6 +31,9 @@ export function createDiscordClient(cfg: Config): Client {
       GatewayIntentBits.MessageContent,
     ],
     partials: [Partials.Channel, Partials.Message],
+
+    // Defense-in-depth: apply safe mentions globally (issue #175).
+    ...(cfg.DISCORD_ALLOW_MENTIONS ? {} : { allowedMentions: DEFAULT_ALLOWED_MENTIONS }),
   });
 }
 

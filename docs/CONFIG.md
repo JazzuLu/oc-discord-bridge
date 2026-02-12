@@ -41,6 +41,15 @@ If empty, the bridge will accept messages from any non-bot user the bot can see 
 ### `DISCORD_IGNORE_BOTS` (default: `true`)
 Ignore messages sent by bots.
 
+### `DISCORD_ALLOW_MENTIONS` (default: `false`)
+If `false` (default), all outbound Discord messages/replies/edits from the bridge include:
+
+- `allowedMentions: { parse: [] }`
+
+This prevents accidental mass pings like `@everyone`, `@here`, role mentions, etc. (issue #175).
+
+Set `true` to opt back in to Discord's normal mention parsing.
+
 ### `DISCORD_IGNORE_CHANNELS_WITHOUT_CWD` (default: `true`)
 Safety switch.
 

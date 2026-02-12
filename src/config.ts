@@ -65,6 +65,10 @@ export const ConfigSchema = z.object({
   DISCORD_IGNORE_BOTS: envBool(true),
   DISCORD_IGNORE_CHANNELS_WITHOUT_CWD: envBool(true),
 
+  // Safety hardening (default): prevent accidental @everyone/@here/role mentions.
+  // Opt back in only if you fully trust the input you echo to Discord.
+  DISCORD_ALLOW_MENTIONS: envBool(false),
+
   // Optional: comma-separated list of allowed absolute path prefixes for channel CWD.
   // When empty/unset, any absolute existing directory is accepted (backwards compatible).
   DISCORD_ALLOWED_CWD_PREFIXES: z

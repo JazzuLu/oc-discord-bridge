@@ -91,6 +91,7 @@ All config is via environment variables:
 - `DISCORD_DEFAULT_DENY` (default: `false`; when `true`, deny by default unless an allowlist matches)
 - `DISCORD_IGNORE_BOTS` (default: `true`)
 - `DISCORD_IGNORE_CHANNELS_WITHOUT_CWD` (default: `true`)
+- `DISCORD_ALLOW_MENTIONS` (default: `false`; when `false`, the bridge sends/edits messages with `allowedMentions: { parse: [] }` to prevent accidental mass mentions; issue #175)
 - `DISCORD_ALLOWED_CWD_PREFIXES` (optional, comma-separated absolute path prefixes allowed for channel `CWD=`; when unset/empty, any existing absolute directory is accepted)
 - `OPENCODE_BIN` (default: `opencode`)
 - `OPENCODE_ACP_AUTOSTART` (default: `true`)

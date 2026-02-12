@@ -39,6 +39,10 @@ pnpm install
 cp .env.example .env
 ```
 
+Notes:
+- `src/index.ts` loads dotenv from `../.env` (repo root). If you run from a different working directory, keep the `.env` location in mind.
+- Commit only `.env.example` — never commit real secrets.
+
 Fill in:
 - `DISCORD_BOT_TOKEN`
 - `DISCORD_GUILD_ID` (recommended; commands are registered **guild-scoped**)

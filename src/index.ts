@@ -39,6 +39,7 @@ const FILE_PAUSED = 'pausedChannels.json';
 import { buildTopicWithCwd, isMainThreadName, parseCwdFromTopic } from './topic.js';
 import { hintMissingPermissionForSetTopic, runDiscordPreflightOnce } from './permissions.js';
 import { redactSecrets } from './redact.js';
+import { enqueueThreadWork, DEFAULT_THREAD_QUEUE_LIMIT } from './threadQueue.js';
 
 type LogCtx = {
   corr?: string;
@@ -46,6 +47,8 @@ type LogCtx = {
   sessionId?: string;
   channelId?: string;
   messageId?: string;
+  queueLimit?: number;
+  queueDepth?: number;
   attempt?: number;
   delayMs?: number;
 };
@@ -59,6 +62,8 @@ function logInfo(msg: string, ctx: LogCtx = {}): void {
     ctx.threadId ? `thread=${ctx.threadId}` : null,
     ctx.sessionId ? `session=${ctx.sessionId}` : null,
     ctx.messageId ? `msg=${ctx.messageId}` : null,
+    typeof ctx.queueLimit === 'number' ? `queueLimit=${ctx.queueLimit}` : null,
+    typeof ctx.queueDepth === 'number' ? `queueDepth=${ctx.queueDepth}` : null,
     typeof ctx.attempt === 'number' ? `attempt=${ctx.attempt}` : null,
     typeof ctx.delayMs === 'number' ? `delayMs=${ctx.delayMs}` : null,
   ].filter(Boolean);
@@ -93,6 +98,8 @@ function logError(msg: string, ctx: LogCtx & { e?: unknown } = {}): void {
     rest.threadId ? `thread=${rest.threadId}` : null,
     rest.sessionId ? `session=${rest.sessionId}` : null,
     rest.messageId ? `msg=${rest.messageId}` : null,
+    typeof (rest as any).queueLimit === 'number' ? `queueLimit=${(rest as any).queueLimit}` : null,
+    typeof (rest as any).queueDepth === 'number' ? `queueDepth=${(rest as any).queueDepth}` : null,
     typeof (rest as any).attempt === 'number' ? `attempt=${(rest as any).attempt}` : null,
     typeof (rest as any).delayMs === 'number' ? `delayMs=${(rest as any).delayMs}` : null,
     meta?.err ? `err=${meta.err}` : null,
@@ -486,6 +493,9 @@ async function streamToDiscord(
   if (scheduled) clearTimeout(scheduled);
 }
 
+const THREAD_BACKPRESSURE_MESSAGE =
+  'Bridge is still replying to earlier prompts in this thread. Please wait a moment before sending more.';
+
 async function main() {
   const client = createDiscordClient(cfg);
   const oc = new OpenCodeAcpClient(cfg.OPENCODE_BIN, process.cwd(), (msg, meta) => {
@@ -740,17 +750,14 @@ async function main() {
 
       const corr = randomUUID().slice(0, 8);
 
-      // Ensure we have full channel objects (topics on parents are often missing on partials)
       const ch = await m.channel.fetch().catch(() => m.channel);
       let { thread, parent } = getThreadAndParentChannel(ch);
       if (parent && !allowParentChannel(parent.id)) return;
 
-      // If user is already in the canonical 'main' thread, remember it to avoid duplicates.
       if (thread && parent && isMainThreadName(thread.name)) {
         await upsertChannelMainThread(parent.id, thread.id);
       }
 
-      // Convenience: if user talks in a configured text channel, reuse (or create) a main thread
       if (!thread && parent) {
         const cwd = await getChannelCwd(parent.id, (parent as any).topic);
         if (cfg.DISCORD_IGNORE_CHANNELS_WITHOUT_CWD && !cwd) return;
@@ -761,79 +768,110 @@ async function main() {
 
       if (!thread || !parent) return;
 
-      // Fetch parent to get latest topic
-      const fullParent = await parent.fetch().catch(() => parent);
+      if (await isChannelPaused(parent.id)) return;
 
-      if (await isChannelPaused(fullParent.id)) return;
+      const scheduled = enqueueThreadWork(thread.id, async () => {
+        let channelId: string | undefined;
+        try {
+          const latestParent = await parent.fetch().catch(() => parent);
+          channelId = latestParent.id;
+          if (await isChannelPaused(channelId)) return;
 
-      const ensured = await ensureThreadSession(oc, thread, fullParent);
-      if (!ensured.ok) return;
+          const ensured = await ensureThreadSession(oc, thread, latestParent);
+          if (!ensured.ok) return;
 
-      const { sessionId, cwd } = ensured.binding;
-      logInfo('prompt:start', {
-        corr,
-        channelId: fullParent.id,
-        threadId: thread.id,
-        sessionId,
-        messageId: m.id,
+          const { sessionId, cwd } = ensured.binding;
+          logInfo('prompt:start', {
+            corr,
+            channelId,
+            threadId: thread.id,
+            sessionId,
+            messageId: m.id,
+          });
+
+          await streamToDiscord(m, async (emit) => {
+            const meta = {
+              corr,
+              threadId: thread.id,
+              channelId,
+              messageId: m.id,
+              sessionId,
+            };
+
+            await retryWithBackoff(
+              async (attempt) => {
+                if (attempt > 1) {
+                  logInfo('prompt:retry', { ...meta, attempt });
+                }
+                try {
+                  await oc.ensureSessionLoaded(sessionId, cwd, { ...meta, attempt });
+
+                  const attachments = Array.from(m.attachments?.values?.() ?? []);
+                  const attachmentText =
+                    attachments.length === 0
+                      ? ''
+                      : `\n\n[Attachments]\n${attachments
+                          .map((a) => {
+                            const name = a.name ?? 'file';
+                            const type = (a as any)?.contentType ? String((a as any).contentType) : '';
+                            const size = formatBytes((a as any)?.size);
+                            const meta = [type, size].filter(Boolean).join(', ');
+                            return `- ${name}${meta ? ` (${meta})` : ''}: ${a.url}`;
+                          })
+                          .join('\n')}`;
+                  const promptText = `${m.content ?? ''}${attachmentText}`.trim();
+
+                  if (!promptText) return;
+
+                  await oc.prompt(sessionId, promptText, emit, { ...meta, attempt });
+                } catch (e) {
+                  logError('prompt:attempt_failed', { ...meta, e });
+                  throw e;
+                }
+              },
+              {
+                attempts: 3,
+                baseDelayMs: 300,
+                onRetry: ({ attempt, delayMs, err }) => {
+                  logError('prompt:retry_scheduled', { ...meta, attempt, delayMs, e: err });
+                },
+              },
+            );
+          });
+
+          const now = Date.now();
+          await setThreadBinding(thread.id, { ...ensured.binding, updatedAt: now });
+        } catch (e) {
+          logError('message:worker_error', {
+            corr,
+            channelId: channelId ?? parent.id,
+            threadId: thread.id,
+            messageId: m.id,
+            e,
+          });
+        }
       });
 
-      await streamToDiscord(m, async (emit) => {
-        const meta = {
+      if (!scheduled) {
+        logInfo('prompt:backpressure', {
           corr,
+          channelId: parent.id,
           threadId: thread.id,
-          channelId: fullParent.id,
           messageId: m.id,
-          sessionId,
-        };
-
-        await retryWithBackoff(
-          async (attempt) => {
-            if (attempt > 1) {
-              logInfo('prompt:retry', { ...meta, attempt });
-            }
-            try {
-              // If ACP restarted, ensure the session binding is re-loaded before prompting.
-              await oc.ensureSessionLoaded(sessionId, cwd, { ...meta, attempt });
-
-              // Include attachment URLs so prompts like "see screenshot" have context.
-              const attachments = Array.from(m.attachments?.values?.() ?? []);
-              const attachmentText =
-                attachments.length === 0
-                  ? ''
-                  : `\n\n[Attachments]\n${attachments
-                      .map((a) => {
-                        const name = a.name ?? 'file';
-                        const type = (a as any)?.contentType ? String((a as any).contentType) : '';
-                        const size = formatBytes((a as any)?.size);
-                        const meta = [type, size].filter(Boolean).join(', ');
-                        return `- ${name}${meta ? ` (${meta})` : ''}: ${a.url}`;
-                      })
-                      .join('\n')}`;
-              const promptText = `${m.content ?? ''}${attachmentText}`.trim();
-
-              // If message has no text and no attachments, do nothing.
-              if (!promptText) return;
-
-              await oc.prompt(sessionId, promptText, emit, { ...meta, attempt });
-            } catch (e) {
-              logError('prompt:attempt_failed', { ...meta, e });
-              throw e;
-            }
-          },
+          queueLimit: DEFAULT_THREAD_QUEUE_LIMIT,
+        });
+        await withDiscordRetry(
+          () => m.reply(THREAD_BACKPRESSURE_MESSAGE),
           {
-            attempts: 3,
-            baseDelayMs: 300,
-            onRetry: ({ attempt, delayMs, err }) => {
-              // Log retry scheduling with correlation ids (no secrets).
-              logError('prompt:retry_scheduled', { ...meta, attempt, delayMs, e: err });
-            },
+            phase: 'backpressure_reply',
+            corr,
+            channelId: parent.id,
+            threadId: thread.id,
+            messageId: m.id,
           },
         );
-      });
-
-      const now = Date.now();
-      await setThreadBinding(thread.id, { ...ensured.binding, updatedAt: now });
+        return;
+      }
     } catch (e) {
       logError('message:error', { e });
     }

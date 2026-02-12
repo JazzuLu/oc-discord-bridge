@@ -26,6 +26,7 @@ import {
 } from './auth.js';
 import { formatCwdValidationError, validateChannelCwd } from './cwd.js';
 import type { ChatInputCommandInteraction, Message, TextChannel, ThreadChannel } from 'discord.js';
+import { bridgeMessageOptions } from './bridgeAllowedMentions.js';
 
 const cfg = loadConfig(process.env);
 
@@ -430,7 +431,10 @@ async function streamToDiscord(
   msg: Message,
   onChunk: (cb: (t: string) => void) => Promise<void>,
 ): Promise<void> {
-  const placeholder = await withDiscordRetry(() => msg.reply('…'), { phase: 'reply_placeholder' });
+  const placeholder = await withDiscordRetry(
+    () => msg.reply(bridgeMessageOptions({ content: '…' })),
+    { phase: 'reply_placeholder' },
+  );
   let text = '';
   let lastEdit = 0;
 
@@ -460,19 +464,28 @@ async function streamToDiscord(
 
     await serial(async () => {
       if (safeText.length <= 2000) {
-        await withDiscordRetry(() => placeholder.edit(safeText || ''), { phase: 'edit_placeholder' });
+        await withDiscordRetry(
+          () => placeholder.edit(bridgeMessageOptions({ content: safeText || '' })),
+          { phase: 'edit_placeholder' },
+        );
         return;
       }
 
       // If too long, finalize current message and continue in new replies.
       // Keep the placeholder capped at 2000.
       const head = safeText.slice(0, 2000);
-      await withDiscordRetry(() => placeholder.edit(head), { phase: 'edit_placeholder_head' });
+      await withDiscordRetry(
+        () => placeholder.edit(bridgeMessageOptions({ content: head })),
+        { phase: 'edit_placeholder_head' },
+      );
       let rest = safeText.slice(2000);
       while (rest.length > 0) {
         const part = rest.slice(0, 2000);
         // eslint-disable-next-line no-await-in-loop
-        await withDiscordRetry(() => msg.reply(part), { phase: 'reply_continuation' });
+        await withDiscordRetry(
+          () => msg.reply(bridgeMessageOptions({ content: part })),
+          { phase: 'reply_continuation' },
+        );
         rest = rest.slice(2000);
       }
     });

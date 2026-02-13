@@ -1,4 +1,6 @@
-type Rule = { name: string; re: RegExp; replace: string | ((m: string) => string) };
+import os from 'node:os';
+
+type Rule = { name: string; re: RegExp; replace: string | ((...args: any[]) => string) };
 
 // Keep this intentionally conservative to reduce false-positives.
 const RULES: Rule[] = [
@@ -22,6 +24,18 @@ const RULES: Rule[] = [
   // AWS access key id (do NOT attempt to detect secret access keys; too many false positives)
   { name: 'aws_access_key', re: /\bAKIA[0-9A-Z]{16}\b/g, replace: 'AKIA***REDACTED***' },
 
+  // Generic bearer tokens (common leak pattern)
+  {
+    name: 'bearer',
+    re: /\bBearer\s+[A-Za-z0-9._-]{20,}\b/g,
+    replace: 'Bearer ***REDACTED***',
+  },
+  {
+    name: 'token_kv',
+    re: /\b(access_token|refresh_token|token)=([A-Za-z0-9._-]{20,})\b/g,
+    replace: (_m: string, k: string) => `${k}=***REDACTED***`,
+  },
+
   // PEM private keys (multi-line)
   {
     name: 'pem',
@@ -36,4 +50,33 @@ export function redactSecrets(input: string): string {
     out = out.replace(r.re, r.replace as any);
   }
   return out;
+}
+
+function redactHomeDir(input: string): string {
+  const home = os.homedir();
+  if (!home) return input;
+  // Normalize both plain and URL-encoded-ish variants conservatively.
+  return input.split(home).join('~');
+}
+
+function redactLongAbsPaths(input: string): string {
+  // Only touch very long absolute paths to reduce false positives.
+  // Example: /var/folders/.../T/tmpfile -> /…/tmpfile
+  return input.replace(/\/[\w\-.~/]{60,}/g, (m) => {
+    const s = m.replace(/\s+/g, '');
+    const parts = s.split('/').filter(Boolean);
+    const base = parts.at(-1);
+    if (!base) return '/…';
+    return `/…/${base}`;
+  });
+}
+
+/**
+ * A slightly broader redaction intended for logs. This is still best-effort.
+ * - Masks known secret/token patterns
+ * - Replaces home dir with ~
+ * - Shortens very long absolute paths
+ */
+export function redactForLogs(input: string): string {
+  return redactLongAbsPaths(redactHomeDir(redactSecrets(input)));
 }

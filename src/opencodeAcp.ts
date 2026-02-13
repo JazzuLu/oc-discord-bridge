@@ -58,6 +58,7 @@ export class OpenCodeAcpClient {
       }
       console.log(parts.join(' '));
     },
+    private redact: (s: string) => string = (s) => s,
   ) {}
 
   private rememberMeta(meta?: Record<string, unknown>): void {
@@ -101,8 +102,10 @@ export class OpenCodeAcpClient {
         await this.ready;
         return;
       } catch (e) {
-        this.log('acp:ready_failed', this.m({ err: (e as any)?.message ?? String(e) }));
-        this.killProc('ready_failed', this.m({ err: (e as any)?.message ?? String(e) }));
+        const raw = (e as any)?.message ?? String(e);
+        const err = this.redact(String(raw));
+        this.log('acp:ready_failed', this.m({ err }));
+        this.killProc('ready_failed', this.m({ err }));
         this.proc = undefined;
         this.rl?.close();
         this.rl = undefined;
@@ -154,8 +157,10 @@ export class OpenCodeAcpClient {
 
     // Spawn-level error (e.g. binary missing) won't emit 'exit' consistently.
     this.proc.on('error', (e) => {
-      this.log('acp:error', this.m({ err: (e as any)?.message ?? String(e) }));
-      const err = new Error(`opencode acp error: ${(e as any)?.message ?? String(e)}`);
+      const raw = (e as any)?.message ?? String(e);
+      const cleaned = this.redact(String(raw));
+      this.log('acp:error', this.m({ err: cleaned }));
+      const err = new Error(`opencode acp error: ${cleaned}`);
       for (const { reject } of this.pending.values()) reject(err);
       this.pending.clear();
       this.proc = undefined;
@@ -172,7 +177,8 @@ export class OpenCodeAcpClient {
       const s = String(buf).trim();
       if (!s) return;
       const line = s.split(/\r?\n/)[0];
-      this.log('acp:stderr', this.m({ line: line.slice(0, 500) }));
+      const cleaned = this.redact(line);
+      this.log('acp:stderr', this.m({ line: cleaned.slice(0, 500) }));
     });
 
     this.rl = readline.createInterface({ input: this.proc.stdout! });

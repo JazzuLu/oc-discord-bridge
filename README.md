@@ -116,6 +116,10 @@ CWD=/absolute/path/to/your/project
 Notes:
 - The bridge looks for the **first** line starting with `CWD=`.
 - By default, channels without `CWD=` are ignored (safety).
+- CWD validation rules:
+  - must be an **absolute** path
+  - must be a **single line** (no `\n` / `\r`)
+  - is **normalized** with `path.resolve()` (so `/a/b/..` becomes `/a`)
 - You can also set CWD using `/oc cwd path:<ABSOLUTE_PATH>`:
   - it will try to update the topic, and
   - it will cache the value for that channel.

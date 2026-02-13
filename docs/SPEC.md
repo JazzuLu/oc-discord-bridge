@@ -2,6 +2,7 @@
 
 ## Core mapping
 - Channel => CWD via channel topic line: `CWD=/abs/path` (A is primary)
+  - validation: absolute path, single-line (no `\n`/`\r`), normalized with `path.resolve()`
 - Thread => OpenCode sessionId (persisted)
 
 ## Routing rules

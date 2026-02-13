@@ -28,11 +28,11 @@ export async function validateChannelCwd(cfg: Pick<Config, 'DISCORD_ALLOWED_CWD_
   if (!st?.isDirectory?.()) return { ok: false, reason: 'not_directory' } as const;
 
   const prefixes = (cfg.DISCORD_ALLOWED_CWD_PREFIXES ?? []).map((p) => p.trim()).filter(Boolean);
-  if (prefixes.length === 0) return { ok: true, cwd: raw } as const;
+  const absPrefixes = prefixes.filter((p) => path.isAbsolute(p));
+  if (absPrefixes.length === 0) return { ok: true, cwd: raw } as const;
 
   const normalized = normAbs(raw);
-  for (const pref of prefixes) {
-    if (!path.isAbsolute(pref)) continue; // ignore misconfig
+  for (const pref of absPrefixes) {
     const nPref = normAbs(pref);
     if (normalized === nPref) return { ok: true, cwd: raw } as const;
 
@@ -44,7 +44,7 @@ export async function validateChannelCwd(cfg: Pick<Config, 'DISCORD_ALLOWED_CWD_
     }
   }
 
-  return { ok: false, reason: 'not_allowed', details: `allowed prefixes: ${prefixes.join(', ')}` } as const;
+  return { ok: false, reason: 'not_allowed', details: `allowed prefixes: ${absPrefixes.join(', ')}` } as const;
 }
 
 export function formatCwdValidationError(r: Exclude<CwdValidationResult, { ok: true }>): string {

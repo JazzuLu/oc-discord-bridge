@@ -43,3 +43,30 @@ test('validateChannelCwd: enforces allowed prefixes when configured', async () =
   assert.equal(bad.ok, false);
   assert.equal(bad.reason, 'not_allowed');
 });
+
+test('validateChannelCwd: prefix match is path-segment safe (no /allowed vs /allowedness)', async () => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'ocdb-cwd-'));
+  const allowed = path.join(base, 'allowed');
+  const allowedness = path.join(base, 'allowedness');
+  await fs.mkdir(allowed);
+  await fs.mkdir(allowedness);
+
+  const cfg = { DISCORD_ALLOWED_CWD_PREFIXES: [allowed] };
+
+  const child = path.join(allowed, 'child');
+  await fs.mkdir(child);
+  const ok = await validateChannelCwd(cfg, child);
+  assert.equal(ok.ok, true);
+
+  const bad = await validateChannelCwd(cfg, allowedness);
+  assert.equal(bad.ok, false);
+  assert.equal(bad.reason, 'not_allowed');
+});
+
+test('validateChannelCwd: ignores misconfigured non-absolute prefixes', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'ocdb-cwd-'));
+  const cfg = { DISCORD_ALLOWED_CWD_PREFIXES: ['relative/prefix'] };
+  const r = await validateChannelCwd(cfg, tmp);
+  // No absolute prefixes effectively configured => allow.
+  assert.deepEqual(r, { ok: true, cwd: tmp });
+});

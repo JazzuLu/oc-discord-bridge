@@ -25,6 +25,11 @@ function isAuthorized(
 }
 
 export function isAuthorizedForOcSlash(cfg: Config, userId: string, memberRoleIds?: string[]): boolean {
+  // Security hardening: if an explicit user allowlist is configured, require it for ALL /oc slash usage.
+  // This prevents role-based bypasses when operators intend to lock /oc to specific accounts.
+  const allowUsers = cfg.DISCORD_ALLOW_USER_IDS ?? [];
+  if (allowUsers.length > 0) return allowUsers.includes(userId);
+
   return isAuthorized(cfg, userId, memberRoleIds);
 }
 

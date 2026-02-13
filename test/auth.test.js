@@ -26,6 +26,14 @@ test('isAuthorizedForOcSlash: allow by role allowlist', () => {
   assert.equal(isAuthorizedForOcSlash(cfg, 'u1', ['r1']), false);
 });
 
+test('isAuthorizedForOcSlash: when user allowlist is non-empty, roles do not grant access', () => {
+  const cfg = { DISCORD_ALLOW_USER_IDS: ['u-allowed'], DISCORD_ALLOW_ROLE_IDS: ['r2'], DISCORD_DEFAULT_DENY: false };
+  // Not in user allowlist => denied even if role matches.
+  assert.equal(isAuthorizedForOcSlash(cfg, 'u1', ['r2']), false);
+  // In user allowlist => allowed.
+  assert.equal(isAuthorizedForOcSlash(cfg, 'u-allowed', []), true);
+});
+
 test('extractRoleIdsFromInteractionMember: supports APIInteractionGuildMember.roles string[]', () => {
   const member = { roles: ['r1', 'r2', 123, null] };
   assert.deepEqual(extractRoleIdsFromInteractionMember(member), ['r1', 'r2']);

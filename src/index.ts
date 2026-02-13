@@ -17,6 +17,7 @@ import {
   handleInteraction,
   isInScopeGuild,
   registerSlashCommands,
+  streamToDiscord,
 } from './discord.js';
 import {
   extractRoleIdsFromInteractionMember,
@@ -453,65 +454,7 @@ async function withDiscordRetry<T>(
   throw lastErr;
 }
 
-async function streamToDiscord(
-  msg: Message,
-  onChunk: (cb: (t: string) => void) => Promise<void>,
-): Promise<void> {
-  const placeholder = await withDiscordRetry(() => msg.reply('…'), { phase: 'reply_placeholder' });
-  let text = '';
-  let lastEdit = 0;
-
-  // Serialize Discord writes for this stream to avoid overlapping edits/replies under burst.
-  let q: Promise<void> = Promise.resolve();
-  const serial = (fn: () => Promise<void>) => {
-    q = q.then(fn, fn);
-    return q;
-  };
-
-  let scheduled: NodeJS.Timeout | null = null;
-  const scheduleFlush = (force = false) => {
-    if (force) return void flush(true);
-    if (scheduled) return;
-    scheduled = setTimeout(() => {
-      scheduled = null;
-      void flush(false);
-    }, 1200);
-  };
-
-  const flush = async (force = false) => {
-    const now = Date.now();
-    if (!force && now - lastEdit < 1100) return;
-    lastEdit = now;
-
-    const safeText = cfg.REDACT_SECRETS ? redactSecrets(text) : text;
-
-    await serial(async () => {
-      if (safeText.length <= 2000) {
-        await withDiscordRetry(() => placeholder.edit(safeText || ''), { phase: 'edit_placeholder' });
-        return;
-      }
-
-      // If too long, finalize current message and continue in new replies.
-      // Keep the placeholder capped at 2000.
-      const head = safeText.slice(0, 2000);
-      await withDiscordRetry(() => placeholder.edit(head), { phase: 'edit_placeholder_head' });
-      let rest = safeText.slice(2000);
-      while (rest.length > 0) {
-        const part = rest.slice(0, 2000);
-        // eslint-disable-next-line no-await-in-loop
-        await withDiscordRetry(() => msg.reply(part), { phase: 'reply_continuation' });
-        rest = rest.slice(2000);
-      }
-    });
-  };
-
-  await onChunk((t) => {
-    text += t;
-    scheduleFlush(false);
-  });
-  await flush(true);
-  if (scheduled) clearTimeout(scheduled);
-}
+// streamToDiscord moved to src/discord.ts
 
 const THREAD_BACKPRESSURE_MESSAGE =
   'Bridge is still replying to earlier prompts in this thread. Please wait a moment before sending more.';
@@ -820,55 +763,71 @@ async function main() {
             messageId: m.id,
           });
 
-          await streamToDiscord(m, async (emit) => {
-            const meta = {
-              corr,
-              threadId: thread.id,
-              channelId,
-              messageId: m.id,
-              sessionId,
-            };
+          await streamToDiscord(
+            m,
+            async (emit) => {
+              const meta = {
+                corr,
+                threadId: thread.id,
+                channelId,
+                messageId: m.id,
+                sessionId,
+              };
 
-            await retryWithBackoff(
-              async (attempt) => {
-                if (attempt > 1) {
-                  logInfo('prompt:retry', { ...meta, attempt });
-                }
-                try {
-                  await oc.ensureSessionLoaded(sessionId, cwd, { ...meta, attempt });
+              await retryWithBackoff(
+                async (attempt) => {
+                  if (attempt > 1) {
+                    logInfo('prompt:retry', { ...meta, attempt });
+                  }
+                  try {
+                    await oc.ensureSessionLoaded(sessionId, cwd, { ...meta, attempt });
 
-                  const attachments = Array.from(m.attachments?.values?.() ?? []);
-                  const attachmentText =
-                    attachments.length === 0
-                      ? ''
-                      : `\n\n[Attachments]\n${attachments
-                          .map((a) => {
-                            const name = a.name ?? 'file';
-                            const type = (a as any)?.contentType ? String((a as any).contentType) : '';
-                            const size = formatBytes((a as any)?.size);
-                            const meta = [type, size].filter(Boolean).join(', ');
-                            return `- ${name}${meta ? ` (${meta})` : ''}: ${a.url}`;
-                          })
-                          .join('\n')}`;
-                  const promptText = `${m.content ?? ''}${attachmentText}`.trim();
+                    const attachments = Array.from(m.attachments?.values?.() ?? []);
+                    const attachmentText =
+                      attachments.length === 0
+                        ? ''
+                        : `\n\n[Attachments]\n${attachments
+                            .map((a) => {
+                              const name = a.name ?? 'file';
+                              const type = (a as any)?.contentType ? String((a as any).contentType) : '';
+                              const size = formatBytes((a as any)?.size);
+                              const meta = [type, size].filter(Boolean).join(', ');
+                              return `- ${name}${meta ? ` (${meta})` : ''}: ${a.url}`;
+                            })
+                            .join('\n')}`;
+                    const promptText = `${m.content ?? ''}${attachmentText}`.trim();
 
-                  if (!promptText) return;
+                    if (!promptText) return;
 
-                  await oc.prompt(sessionId, promptText, emit, { ...meta, attempt });
-                } catch (e) {
-                  logError('prompt:attempt_failed', { ...meta, e });
-                  throw e;
-                }
-              },
-              {
-                attempts: 3,
-                baseDelayMs: 300,
-                onRetry: ({ attempt, delayMs, err }) => {
-                  logError('prompt:retry_scheduled', { ...meta, attempt, delayMs, e: err });
+                    await oc.prompt(sessionId, promptText, emit, { ...meta, attempt });
+                  } catch (e) {
+                    logError('prompt:attempt_failed', { ...meta, e });
+                    throw e;
+                  }
                 },
+                {
+                  attempts: 3,
+                  baseDelayMs: 300,
+                  onRetry: ({ attempt, delayMs, err }) => {
+                    logError('prompt:retry_scheduled', { ...meta, attempt, delayMs, e: err });
+                  },
+                },
+              );
+            },
+            {
+              corr,
+              meta: {
+                corr,
+                threadId: thread.id,
+                channelId,
+                messageId: m.id,
+                sessionId,
               },
-            );
-          });
+              withDiscordRetry,
+              redactSecrets: cfg.REDACT_SECRETS,
+              redact: redactSecrets,
+            },
+          );
 
           const now = Date.now();
           await setThreadBinding(thread.id, { ...ensured.binding, updatedAt: now });
